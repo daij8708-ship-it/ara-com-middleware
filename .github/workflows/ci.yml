@@ -1,0 +1,39 @@
+name: C++ 持续集成
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: 普通构建
+            sanitizer_flags: ""
+          - name: ASan-UBSan
+            sanitizer_flags: "-DARA_COM_ENABLE_ASAN=ON -DARA_COM_ENABLE_UBSAN=ON"
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装依赖
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libgtest-dev
+      - name: 配置
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DARA_COM_BUILD_TESTS=ON -DARA_COM_USE_VSOMEIP=OFF
+          ${{ matrix.sanitizer_flags }}
+      - name: 编译
+        run: cmake --build build --parallel 2
+      - name: 测试
+        run: ctest --test-dir build --output-on-failure --output-junit test-results.xml
+      - name: 上传测试结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.name }}
+          path: build/test-results.xml
+          if-no-files-found: warn

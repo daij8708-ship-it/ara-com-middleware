@@ -1,0 +1,80 @@
+{
+    "_comment": "AP AUTOSAR ara::com middleware — service configuration file",
+    "_description": "Centrally manages all service IDs, instance IDs, IP addresses, and ports",
+
+    "services": [
+        {
+            "service_id": 4660,
+            "instance_id": 1,
+            "major_version": 1,
+            "minor_version": 0,
+            "ip_address": "127.0.0.1",
+            "port": 30500,
+            "protocol": "UDP",
+            "role": "server"
+        },
+        {
+            "service_id": 4660,
+            "instance_id": 1,
+            "major_version": 1,
+            "minor_version": 0,
+            "ip_address": "127.0.0.1",
+            "port": 30500,
+            "protocol": "UDP",
+            "role": "client"
+        },
+        {
+            "service_id": 8193,
+            "instance_id": 1,
+            "major_version": 1,
+            "minor_version": 0,
+            "ip_address": "127.0.0.1",
+            "port": 30501,
+            "protocol": "TCP",
+            "role": "server"
+        },
+        {
+            "service_id": 8193,
+            "instance_id": 1,
+            "major_version": 1,
+            "minor_version": 0,
+            "ip_address": "127.0.0.1",
+            "port": 30501,
+            "protocol": "TCP",
+            "role": "client"
+        },
+        {
+            "service_id": 12289,
+            "instance_id": 1,
+            "major_version": 1,
+            "minor_version": 0,
+            "ip_address": "127.0.0.1",
+            "port": 30502,
+            "protocol": "UDP",
+            "role": "server"
+        }
+    ],
+
+    "e2e": {
+        "enabled": true,
+        "max_counter": 15
+    },
+
+    "fragmentation": {
+        "enabled": true,
+        "mtu": 1400
+    },
+
+    "heartbeat": {
+        "enabled": true,
+        "interval_ms": 1000,
+        "timeout_ms": 3000
+    },
+
+    "reconnect": {
+        "enabled": true,
+        "initial_delay_ms": 100,
+        "max_delay_ms": 5000,
+        "backoff_multiplier": 2
+    }
+}

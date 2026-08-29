@@ -1,0 +1,10 @@
+/build*/
+/install/
+*.log
+*.pcap
+*.pcapng
+.cache/
+.idea/
+.vscode/
+compile_commands.json
+/artifacts/
