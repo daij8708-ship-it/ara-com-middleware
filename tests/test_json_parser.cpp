@@ -9,7 +9,7 @@
 using namespace ara::com::config;
 
 // =========================================================================
-//  Basic parsing
+//  基本解析
 // =========================================================================
 
 TEST(JsonParserTest, ParseServicesArray) {
@@ -51,7 +51,7 @@ TEST(JsonParserTest, ParseServicesArray) {
 }
 
 // =========================================================================
-//  Find by role
+//  按角色查找
 // =========================================================================
 
 TEST(JsonParserTest, FilterByRole) {
@@ -74,7 +74,7 @@ TEST(JsonParserTest, FilterByRole) {
 }
 
 // =========================================================================
-//  E2E config
+//  E2E 配置
 // =========================================================================
 
 TEST(JsonParserTest, ParseE2EConfig) {
@@ -93,7 +93,7 @@ TEST(JsonParserTest, ParseE2EConfig) {
 }
 
 // =========================================================================
-//  Heartbeat config
+//  心跳配置
 // =========================================================================
 
 TEST(JsonParserTest, ParseHeartbeatConfig) {
@@ -114,7 +114,7 @@ TEST(JsonParserTest, ParseHeartbeatConfig) {
 }
 
 // =========================================================================
-//  Reconnect config
+//  重连配置
 // =========================================================================
 
 TEST(JsonParserTest, ParseReconnectConfig) {
@@ -172,7 +172,7 @@ TEST(JsonParserTest, FindMissingService) {
 }
 
 // =========================================================================
-//  Fragmentation config
+//  分片配置
 // =========================================================================
 
 TEST(JsonParserTest, ParseFragmentationConfig) {
@@ -191,7 +191,7 @@ TEST(JsonParserTest, ParseFragmentationConfig) {
 }
 
 // =========================================================================
-//  Invalid JSON
+//  非法 JSON
 // =========================================================================
 
 TEST(JsonParserTest, InvalidJson) {
@@ -202,7 +202,7 @@ TEST(JsonParserTest, InvalidJson) {
 }
 
 // =========================================================================
-//  Empty services array
+//  空服务列表
 // =========================================================================
 
 TEST(JsonParserTest, EmptyServices) {

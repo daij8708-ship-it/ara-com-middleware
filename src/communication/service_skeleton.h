@@ -182,10 +182,10 @@ bool ServiceSkeleton::publish_event(EventId event_id, const T& data) {
         return false;
     }
 
-    // Serialize
+    // 序列化数据
     std::vector<std::uint8_t> serialized = it->second(&data);
 
-    // Publish raw bytes
+    // 发布序列化后的字节
     return publish_event_raw(event_id, serialized);
 }
 

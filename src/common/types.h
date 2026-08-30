@@ -55,30 +55,30 @@ using MinorVersion = std::uint32_t;
 
 /// 分级日志严重程度
 enum class LogLevel : std::uint8_t {
-    TRACE = 0,   ///< Fine-grained tracing
-    DEBUG = 1,   ///< Debug information
-    INFO  = 2,   ///< Informational messages
-    WARN  = 3,   ///< Warnings
-    ERROR = 4,   ///< Recoverable errors
-    FATAL = 5    ///< Fatal errors (triggers abort in debug builds)
+    TRACE = 0,   ///< 详细跟踪
+    DEBUG = 1,   ///< 调试信息
+    INFO  = 2,   ///< 一般信息
+    WARN  = 3,   ///< 警告
+    ERROR = 4,   ///< 可恢复的错误
+    FATAL = 5    ///< 严重错误级别
 };
 
 /// 远端服务可用状态
 enum class ServiceAvailability : std::uint8_t {
-    UNKNOWN    = 0,  ///< Service state not yet determined
-    AVAILABLE  = 1,  ///< Service is reachable
-    UNAVAILABLE = 2  ///< Service is not reachable
+    UNKNOWN    = 0,  ///< 尚未确定服务状态
+    AVAILABLE  = 1,  ///< 服务可用
+    UNAVAILABLE = 2  ///< 服务不可用
 };
 
 /// Method 调用及内部操作返回码
 enum class ComRet : std::uint8_t {
-    OK            = 0,   ///< Operation succeeded
-    TIMEOUT       = 1,   ///< Operation timed out
-    NOT_AVAILABLE = 2,   ///< Service/endpoint not available
-    E2E_ERROR     = 3,   ///< E2E protection check failed
-    FRAGMENT_ERR  = 4,   ///< Message fragmentation/reassembly error
-    INTERNAL_ERR  = 5,   ///< Internal framework error
-    NOT_CONNECTED = 6    ///< Connection not established
+    OK            = 0,   ///< 操作成功
+    TIMEOUT       = 1,   ///< 操作超时
+    NOT_AVAILABLE = 2,   ///< 服务或端点不可用
+    E2E_ERROR     = 3,   ///< E2E 校验失败
+    FRAGMENT_ERR  = 4,   ///< 分片或重组出错
+    INTERNAL_ERR  = 5,   ///< 框架内部错误
+    NOT_CONNECTED = 6    ///< 连接尚未建立
 };
 
 // =========================================================================
@@ -147,7 +147,7 @@ struct ServiceConfig {
 
 /// E2E 保护配置
 struct E2EConfig {
-    bool   enabled{true};            ///< Enable E2E protection
+    bool   enabled{true};            ///< 启用 E2E 保护
     std::uint16_t  max_counter{15};  ///< Counter wrap-around value (Profile 1 default: 15)
     /// CRC-8 多项式配置
 };

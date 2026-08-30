@@ -116,14 +116,14 @@ TEST_F(ServiceProxyTest, InitAndStart) {
 
 TEST_F(ServiceProxyTest, InitWithoutStart) {
     EXPECT_TRUE(m_proxy->init());
-    m_proxy->stop();  // Should not crash
+    m_proxy->stop();  // 此时停止也不应崩溃
 }
 
 TEST_F(ServiceProxyTest, DoubleStop) {
     m_proxy->init();
     m_proxy->start();
     m_proxy->stop();
-    m_proxy->stop();  // Should be safe
+    m_proxy->stop();  // 重复停止应保持安全
 }
 
 // =========================================================================
@@ -175,7 +175,7 @@ TEST_F(ServiceProxyTest, SyncMethodCall) {
 }
 
 // =========================================================================
-//  Service availability
+//  服务可用性
 // =========================================================================
 
 TEST_F(ServiceProxyTest, AvailabilityCallback) {

@@ -19,20 +19,20 @@ namespace com {
 namespace safety {
 
 // =========================================================================
-//  E2E Profile 1 constants
+//  简化 E2E 实现使用的常量
 // =========================================================================
 
-/// E2E header size in bytes: 1 byte CRC + optional counter encoding
+/// E2E 头共 2 字节：计数器字节和 CRC 字节
 constexpr std::size_t E2E_HEADER_SIZE = 2;
 
 /// 计数器回绕前的最大值
 constexpr std::uint8_t E2E_MAX_COUNTER = 14;
 
-/// Special counter value indicating a reset
+/// 预留的计数器重置标记
 constexpr std::uint8_t E2E_COUNTER_RESET = 15;
 
 // =========================================================================
-//  E2E Protector (Sender side)
+//  发送端的 E2E 保护器
 // =========================================================================
 
 /**
@@ -61,7 +61,7 @@ private:
 };
 
 // =========================================================================
-//  E2E Checker (Receiver side)
+//  接收端的 E2E 检查器
 // =========================================================================
 
 /**
@@ -87,11 +87,11 @@ public:
     ComRet check(const std::vector<std::uint8_t>& protected_data,
                  std::vector<std::uint8_t>& out_payload);
 
-    /// Reset checker state (e.g., on connection re-establishment)
+    /// 重连后可重置检查状态，从下一条消息重新记录计数器
     void reset();
 
 private:
-    std::uint8_t m_last_counter{0xFF};  // 0xFF = uninitialized
+    std::uint8_t m_last_counter{0xFF};  // 0xFF 表示尚未收到首条消息
     std::uint8_t m_max_counter{E2E_MAX_COUNTER};
     std::uint32_t m_ok_count{0};
     std::uint32_t m_error_count{0};

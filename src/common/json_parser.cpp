@@ -1,11 +1,11 @@
 /**
  * @file    json_parser.cpp
- * @brief   自研轻量 JSON 配置解析器。
+ * @brief   JSON 配置解析器。
  *
- * Implements a simple recursive-descent JSON parser sufficient for
+ * 使用递归下降方式解析 JSON。
  * 用于解析扁平服务配置，不依赖第三方 JSON 库。
  *
- * Supports: objects, arrays, strings, numbers (int/double), booleans, null.
+ * 支持对象、数组、字符串、数字、布尔值和 null。
  * 暂不支持 Unicode 转义和整数科学计数法。
  */
 
@@ -89,7 +89,7 @@ static std::string parse_string(JsonTokenizer& tok) {
     tok.expect('"');
     std::string result;
     while (true) {
-        if (tok.pos() >= 4096) {  // safety guard
+        if (tok.pos() >= 4096) {  // 限制字符串解析位置，避免持续扫描
             throw ComException("String too long or unterminated");
         }
         char c = tok.advance();

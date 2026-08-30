@@ -1,4 +1,4 @@
-# Lightweight ara::com-style API on top of vsomeip.
+# 在 vsomeip 上封装一层轻量的 ara::com 风格接口。
 cmake_minimum_required(VERSION 3.20)
 project(ara-com-middleware VERSION 1.0.0 LANGUAGES CXX)
 
@@ -84,3 +84,43 @@ install(TARGETS ara_com
 
 install(FILES config/services.json
         DESTINATION etc/ara-com)
+
+if(ARA_COM_USE_VSOMEIP AND ARA_COM_BUILD_TESTS)
+    add_executable(rpc_completion_test tests/rpc_completion_test.cpp)
+    target_link_libraries(rpc_completion_test PRIVATE ara_com Threads::Threads)
+    target_include_directories(rpc_completion_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+endif()
+
+# 仅为异步 RPC 完成测试开启追踪，普通构建不启用。
+option(ARA_COM_RPC_COMPLETION_TRACE "Trace request/session/timeout for RPC completion probe" OFF)
+if(ARA_COM_RPC_COMPLETION_TRACE)
+    if(NOT ARA_COM_USE_VSOMEIP OR NOT ARA_COM_BUILD_TESTS)
+        message(FATAL_ERROR "RPC completion tracing requires vsomeip and ARA_COM_BUILD_TESTS=ON (with GTest available)")
+    endif()
+    target_compile_definitions(ara_com PRIVATE ARA_COM_RPC_COMPLETION_TRACE)
+    target_compile_definitions(rpc_completion_test PRIVATE ARA_COM_RPC_COMPLETION_TRACE)
+endif()
+
+# 检查多个在途请求的完成结果，保留原来的单请求测试。
+if(ARA_COM_USE_VSOMEIP AND ARA_COM_BUILD_TESTS)
+    add_executable(rpc_concurrency_test tests/rpc_concurrency_test.cpp)
+    target_link_libraries(rpc_concurrency_test PRIVATE ara_com Threads::Threads)
+    target_include_directories(rpc_concurrency_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    if(ARA_COM_RPC_COMPLETION_TRACE)
+        target_compile_definitions(rpc_concurrency_test PRIVATE ARA_COM_RPC_COMPLETION_TRACE)
+    endif()
+endif()
+
+# 服务停止和恢复的集成测试。
+if(ARA_COM_USE_VSOMEIP AND ARA_COM_BUILD_TESTS)
+    add_executable(rpc_disconnect_recovery_test tests/rpc_disconnect_recovery_test.cpp)
+    target_link_libraries(rpc_disconnect_recovery_test PRIVATE ara_com Threads::Threads)
+    target_include_directories(rpc_disconnect_recovery_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+endif()
+
+# 使用真实 vsomeip 后端的容量测试，测量时采用 Release 构建。
+if(ARA_COM_USE_VSOMEIP AND ARA_COM_BUILD_BENCHMARKS)
+    add_executable(vsomeip_capacity bench/vsomeip_capacity.cpp)
+    target_link_libraries(vsomeip_capacity PRIVATE ara_com Threads::Threads)
+    target_include_directories(vsomeip_capacity PRIVATE ${CMAKE_SOURCE_DIR}/src)
+endif()

@@ -128,7 +128,7 @@ int main(int argc, char* argv[]) {
         if (tick % 4 == 0) {
             demo::SensorRequest req;
             req.sensor_id = 1;
-            req.command = (tick / 4) % 3;  // Cycle through read/calibrate/reset
+            req.command = (tick / 4) % 3;  // 轮流发送读取、校准、重置命令
 
             try {
                 auto rsp = proxy.call_method_sync<demo::SensorRequest, demo::SensorResponse>(
@@ -148,7 +148,7 @@ int main(int argc, char* argv[]) {
             // 同时发起异步调用
             demo::SensorRequest async_req;
             async_req.sensor_id = 2;
-            async_req.command = 0;  // read
+            async_req.command = 0;  // 读取
             proxy.call_method_async<demo::SensorRequest, demo::SensorResponse>(
                 0x0101, async_req,
                 [](ComRet status, const std::vector<std::uint8_t>& /*raw_rsp*/) {

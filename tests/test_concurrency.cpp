@@ -19,7 +19,7 @@
 using namespace ara::com;
 
 // =========================================================================
-//  Concurrent event types
+//  并发测试用的事件类型
 // =========================================================================
 
 struct ConcurrentEvent {
@@ -110,7 +110,7 @@ TEST(ConcurrencyTest, Simulate15Services) {
         t.join();
     }
 
-    // Verify all events were "sent"
+    // 核对发布计数；这里统计的是测试中的发送操作
     for (int i = 0; i < NUM_SERVICES; ++i) {
         EXPECT_EQ(counters[i].load(), EVENTS_PER_SERVICE);
     }
@@ -176,11 +176,11 @@ TEST(ConcurrencyTest, Simulate20ServicesStress) {
     skeletons.clear();
     backend->stop();
 
-    SUCCEED();  // If we reach here without crash, test passes
+    SUCCEED();  // 走到这里说明本轮并发操作和清理没有崩溃
 }
 
 // =========================================================================
-//  Concurrent skeleton + proxy interaction
+//  Skeleton 和 Proxy 的并发交互
 // =========================================================================
 
 TEST(ConcurrencyTest, MixedSkeletonProxyConcurrency) {

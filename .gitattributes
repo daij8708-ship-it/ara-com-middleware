@@ -1,0 +1,3 @@
+# Normalize source and documentation consistently across platforms.
+* text=auto eol=lf
+*.sh text eol=lf

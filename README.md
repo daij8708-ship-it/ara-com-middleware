@@ -31,11 +31,13 @@ config/              服务与 vsomeip 配置
 ```
 
 协议细节和实现限制见 [docs/protocol.md](docs/protocol.md)，测试边界见
-[docs/testing.md](docs/testing.md)。
+[docs/run-all-tests.md](docs/run-all-tests.md)。
 
 ## 构建
 
+建议在 Linux / WSL2 中构建和运行；真实 vsomeip 测试需要 Ubuntu 22.04 / WSL2 环境。
 默认构建不依赖 vsomeip；如果系统没有 GTest，CMake 会跳过测试。
+运行测试前请确认 CMake 已找到 GTest。
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -46,9 +48,9 @@ ctest --test-dir build --output-on-failure
 也可以使用仓库里的构建脚本：
 
 ```bash
-./build.sh                 # Debug + NullBackend
-./build.sh release         # Release + NullBackend
-./build.sh x86 vsomeip     # 启用真实 SOME/IP backend
+bash build.sh                 # Debug + NullBackend
+bash build.sh release         # Release + NullBackend
+bash build.sh x86 vsomeip     # 启用真实 SOME/IP backend
 ```
 
 启用 vsomeip 时需要系统能够找到 `vsomeip3`：
@@ -61,7 +63,7 @@ cmake --build build-vsomeip -j"$(nproc)"
 ## 运行示例
 
 跨进程的 server/client 示例必须使用 vsomeip backend。`NullBackend` 只在同一进程
-内路由消息，适合测试 API，不代表真实网络链路。
+内路由消息，用于 API 单元测试。
 
 ```bash
 export VSOMEIP_CONFIGURATION="$PWD/config/vsomeip.json"
@@ -75,7 +77,18 @@ export VSOMEIP_APPLICATION_NAME=ara_com_client_4660
 ./build-vsomeip/demo/demo_client config/services.json
 ```
 
-`scripts/verify_vsomeip.sh` 封装了相同的双进程检查，并把日志保存到构建目录。
+`scripts/verify_vsomeip.sh` 封装了双进程检查，使用 `build/` 下的程序，并把日志保存到 `artifacts/vsomeip-validation-时间戳/`。完整命令见测试指南。
+
+## 测试与运行时修复
+
+- 异步 RPC 正确性：完成次数、超时边界、迟到响应，以及窗口 4/16 的多在途请求验证。
+- 服务停止恢复：通过 SIGTERM 停止服务端并重启，检查可用性变化及恢复后的 RPC。
+- 容量测试：真实 vsomeip 后端，同机独立 router/server/client，64 字节 Echo，单客户端在途窗口 1/4/16/32/64/128；每档预热 10 秒、测量 60 秒、重复 3 次。窗口数不是独立客户端数量。
+- 运行时修复：保存服务发布时的 major/minor 版本，停止发布时使用相同版本，并避免重复停止。
+
+复现步骤见[测试运行指南](docs/run-all-tests.md)。
+测试指南末尾列出了运行记录需要保存的信息；原始报告单独保存。
+当前 CI 运行 NullBackend 单元测试及 ASan/UBSan；真实后端集成与容量测试需按指南手动执行，未接入 CTest/CI。
 
 ## 没有覆盖的范围
 

@@ -23,7 +23,7 @@ TEST(FragmentationTest, SingleFragmentRoundTrip) {
     // 负载未超过 MTU，应只有一个分片
     ASSERT_EQ(fragments.size(), 1);
 
-    // Reassemble
+    // 把分片交给重组器
     std::vector<std::uint8_t> result;
     reassembler.set_callback([&result](const std::vector<std::uint8_t>& complete) {
         result = complete;
@@ -35,25 +35,25 @@ TEST(FragmentationTest, SingleFragmentRoundTrip) {
 }
 
 // =========================================================================
-//  Multi-fragment round-trip
+//  多分片拆分和重组
 // =========================================================================
 
 TEST(FragmentationTest, MultiFragmentRoundTrip) {
-    // Use a very small MTU to force fragmentation
-    constexpr std::uint16_t SMALL_MTU = 20;  // 20B total, 14B payload per fragment
+    // 把 MTU 设小，让负载必须拆成多片
+    constexpr std::uint16_t SMALL_MTU = 20;  // 每片共 20 字节，扣掉 6 字节头后可放 14 字节负载
     MessageFragmenter fragmenter(SMALL_MTU);
     MessageReassembler reassembler;
 
     // 创建超过单片容量的负载
-    std::vector<std::uint8_t> original(100, 0xAB);  // 100 bytes of 0xAB
+    std::vector<std::uint8_t> original(100, 0xAB);  // 填入 100 个 0xAB 字节
     for (std::size_t i = 0; i < original.size(); ++i) {
         original[i] = static_cast<std::uint8_t>(i);
     }
 
     auto fragments = fragmenter.fragment(original);
-    EXPECT_GT(fragments.size(), 1);  // Should produce multiple fragments
+    EXPECT_GT(fragments.size(), 1);  // 应拆成多片
 
-    // Reassemble
+    // 把分片交给重组器
     std::vector<std::uint8_t> result;
     reassembler.set_callback([&result](const std::vector<std::uint8_t>& complete) {
         result = complete;
@@ -106,13 +106,13 @@ TEST(FragmentationTest, MultipleSenders) {
 }
 
 // =========================================================================
-//  Invalid fragment handling
+//  非法分片处理
 // =========================================================================
 
 TEST(FragmentationTest, InvalidFragmentTooShort) {
     MessageReassembler reassembler;
 
-    std::vector<std::uint8_t> too_short = {0x00, 0x01};  // Only 2 bytes, need 6
+    std::vector<std::uint8_t> too_short = {0x00, 0x01};  // 只有 2 字节，不够 6 字节的分片头
     ComRet ret = reassembler.process_fragment(too_short, 1);
     EXPECT_EQ(ret, ComRet::FRAGMENT_ERR);
 }
@@ -120,7 +120,7 @@ TEST(FragmentationTest, InvalidFragmentTooShort) {
 TEST(FragmentationTest, InvalidFragmentIndex) {
     MessageReassembler reassembler;
 
-    // Header: msg_id=0, total=2, frag_idx=5 (invalid: >= total), len=0
+    // 头部设为 msg_id=0、total=2、frag_idx=5、len=0，故意让分片下标越界
     std::vector<std::uint8_t> bad = {0x00, 0x00, 0x02, 0x05, 0x00, 0x00};
     ComRet ret = reassembler.process_fragment(bad, 1);
     EXPECT_EQ(ret, ComRet::FRAGMENT_ERR);
@@ -195,7 +195,7 @@ TEST(FragmentationTest, CleanupStaleBuffer) {
     });
 
     // 使用短超时清理未完成缓存
-    reassembler.cleanup_expired(0);  // Immediately expire
+    reassembler.cleanup_expired(0);  // 用零超时清理已过期缓存
 
     EXPECT_FALSE(callback_triggered);
 }

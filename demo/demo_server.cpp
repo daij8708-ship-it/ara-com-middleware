@@ -85,18 +85,18 @@ int main(int argc, char* argv[]) {
 
             demo::SensorResponse rsp;
             rsp.sensor_id = req.sensor_id;
-            rsp.status = 0;  // OK
+            rsp.status = 0;  // 成功
 
             switch (req.command) {
-                case 0:  // read
-                    rsp.value = 42;  // Simulated sensor value
+                case 0:  // 读取
+                    rsp.value = 42;  // 模拟的传感器读数
                     rsp.message = "OK: sensor read successful";
                     break;
-                case 1:  // calibrate
+                case 1:  // 校准
                     rsp.value = 0;
                     rsp.message = "OK: calibration complete";
                     break;
-                case 2:  // reset
+                case 2:  // 重置
                     rsp.value = 0;
                     rsp.message = "OK: sensor reset";
                     break;
@@ -145,7 +145,7 @@ int main(int argc, char* argv[]) {
 
         skeleton.publish_event(0x8001, speed);
 
-        if (tick % 50 == 0) {  // Log every 5 seconds
+        if (tick % 50 == 0) {  // 约每 5 秒记一次日志
             ARA_LOG_INFO("DEMO_SERVER", "Published event #" + std::to_string(tick) +
                          " speed=" + std::to_string(speed.speed_kmh) + " km/h");
         }

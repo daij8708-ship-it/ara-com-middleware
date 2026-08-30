@@ -57,7 +57,7 @@ std::vector<std::uint8_t> E2EProtector::protect(const std::vector<std::uint8_t>&
     protected_data.reserve(E2E_HEADER_SIZE + data.size());
 
     // 构造头部：[counter:4bit | reserved:4bit] [CRC-8]
-    std::uint8_t counter_byte = (m_counter & 0x0F) << 4;  // upper nibble = counter
+    std::uint8_t counter_byte = (m_counter & 0x0F) << 4;  // 高 4 位放计数器
 
     // 对计数器字节和业务数据计算 CRC-8
     std::vector<std::uint8_t> crc_input;

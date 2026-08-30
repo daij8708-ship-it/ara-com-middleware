@@ -61,16 +61,16 @@ TEST_F(ServiceSkeletonTest, InitAndStart) {
 TEST_F(ServiceSkeletonTest, InitWithoutStart) {
     EXPECT_TRUE(m_skeleton->init());
     // 未启动时调用 stop() 应保持安全
-    m_skeleton->stop();  // Should not crash
+    m_skeleton->stop();  // 此时停止也不应崩溃
 }
 
 TEST_F(ServiceSkeletonTest, StartWithoutInit) {
-    EXPECT_FALSE(m_skeleton->start());  // Should fail
+    EXPECT_FALSE(m_skeleton->start());  // 没有初始化，应启动失败
 }
 
 TEST_F(ServiceSkeletonTest, DoubleInit) {
     EXPECT_TRUE(m_skeleton->init());
-    EXPECT_TRUE(m_skeleton->init());  // Should be idempotent
+    EXPECT_TRUE(m_skeleton->init());  // 重复初始化应成功返回
 }
 
 // =========================================================================
@@ -187,7 +187,7 @@ TEST_F(ServiceSkeletonTest, RegisterMethod) {
             return TestResponse{req.a + req.b};
         });
 
-    // No exception = success
+    // 确认注册过程没有抛异常
     SUCCEED();
 }
 

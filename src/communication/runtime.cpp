@@ -165,10 +165,10 @@ private:
     std::vector<AvailabilityCallback> m_availability_callbacks;
     std::mutex m_mutex;
 
-    // Key: (service_id, instance_id, method_id)
+    // 用服务、实例和方法编号一起区分处理函数
     std::map<std::tuple<ServiceId, InstanceId, MethodId>, MethodHandler> m_method_handlers;
 
-    // Key: (service_id, instance_id, event_id)
+    // 用服务、实例和事件编号一起区分订阅
     std::map<std::tuple<ServiceId, InstanceId, EventId>, std::vector<EventCallback>> m_event_subscribers;
 };
 
@@ -177,6 +177,29 @@ private:
 // =========================================================================
 
 #ifdef ARA_COM_USE_VSOMEIP
+
+// 仅检查 RPC 测试约定的 32 字节 Echo 负载。
+// 普通构建关闭这段追踪，不能把任意业务数据都当作测试请求解码。
+#ifdef ARA_COM_RPC_COMPLETION_TRACE
+static std::int64_t rpc_trace_us() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+static std::uint32_t rpc_trace_id(const std::vector<std::uint8_t>& bytes) {
+    std::uint32_t id = 0;
+    for (unsigned i = 0; i < 4; ++i) id = (id << 8) | bytes[i];
+    return id;
+}
+static void rpc_trace(const char* event, std::uint32_t id,
+                      vsomeip::session_t session, std::int64_t observed_us,
+                      std::int64_t deadline_us = 0) {
+    ARA_LOG_INFO("RPC_TRACE", std::string("event=") + event +
+        " request_id=" + std::to_string(id) +
+        " session=" + std::to_string(session) +
+        " observed_us=" + std::to_string(observed_us) +
+        " deadline_us=" + std::to_string(deadline_us));
+}
+#endif
 
 class VSomeIPBackend : public ICommunicationBackend {
 public:
@@ -252,17 +275,26 @@ public:
 
     bool offer_service(ServiceId sid, InstanceId iid,
                        MajorVersion major, MinorVersion minor) override {
-        if (m_app) {
-            m_app->offer_service(sid, iid, major, minor);
-            return true;
+        if (!m_app) return false;
+        m_app->offer_service(sid, iid, major, minor);
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_offered_services[encode_key(sid, iid, 0)] = {major, minor};
         }
-        return false;
+        return true;
     }
 
     void stop_offer_service(ServiceId sid, InstanceId iid) override {
-        if (m_app) {
-            m_app->stop_offer_service(sid, iid);
+        if (!m_app) return;
+        std::pair<MajorVersion, MinorVersion> version;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            const auto it = m_offered_services.find(encode_key(sid, iid, 0));
+            if (it == m_offered_services.end()) return; // 已经停止发布，直接返回。
+            version = it->second;
+            m_offered_services.erase(it);
         }
+        m_app->stop_offer_service(sid, iid, version.first, version.second);
     }
 
     bool register_method_handler(ServiceId sid, InstanceId iid,
@@ -440,6 +472,17 @@ public:
             m_async_calls[session] = {
                 std::move(callback),
                 std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms)};
+#ifdef ARA_COM_RPC_COMPLETION_TRACE
+            auto& trace_pending = m_async_calls[session];
+            trace_pending.trace_enabled = sid == 0x1234 && iid == 1 && mid == 0x0102
+                                       && request.size() == 32;
+            if (trace_pending.trace_enabled) {
+                trace_pending.trace_request_id = rpc_trace_id(request);
+                rpc_trace("SUBMIT", trace_pending.trace_request_id, session, rpc_trace_us(),
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        trace_pending.deadline.time_since_epoch()).count());
+            }
+#endif
         }
         m_timeout_cv.notify_all();
         return true;
@@ -564,9 +607,14 @@ private:
     struct AsyncPendingCall {
         MethodReplyCallback callback;
         std::chrono::steady_clock::time_point deadline;
+#ifdef ARA_COM_RPC_COMPLETION_TRACE
+        bool trace_enabled{false};
+        std::uint32_t trace_request_id{0};
+#endif
     };
 
     void timeout_loop() {
+        // 共用一个超时线程，优先等最近的截止时间，避免每个请求都开线程。
         std::unique_lock<std::mutex> lock(m_mutex);
         while (m_running.load()) {
             if (m_async_calls.empty()) {
@@ -586,12 +634,19 @@ private:
             std::vector<MethodReplyCallback> expired;
             for (auto it = m_async_calls.begin(); it != m_async_calls.end();) {
                 if (it->second.deadline <= now) {
+#ifdef ARA_COM_RPC_COMPLETION_TRACE
+                    if (it->second.trace_enabled)
+                        rpc_trace("TIMEOUT_CLAIMED", it->second.trace_request_id,
+                                  it->first, rpc_trace_us());
+#endif
+                    // 持锁移走回调并删除记录，响应线程就不能再完成同一个请求。
                     expired.push_back(std::move(it->second.callback));
                     it = m_async_calls.erase(it);
                 } else {
                     ++it;
                 }
             }
+            // 业务回调可能再次调用通信接口，执行前先释放请求表的锁。
             lock.unlock();
             for (auto& callback : expired) if (callback) callback(ComRet::TIMEOUT, {});
             lock.lock();
@@ -607,12 +662,16 @@ private:
     }
 
     void complete_pending(const std::shared_ptr<vsomeip::message>& msg) {
+#ifdef ARA_COM_RPC_COMPLETION_TRACE
+        const auto trace_received_us = rpc_trace_us();
+#endif
         const auto session = msg->get_session();
         ARA_LOG_DEBUG("VSOMEIP", "Response session=" + std::to_string(session));
         std::shared_ptr<PendingCall> sync;
         MethodReplyCallback async;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
+            // 只处理仍在等待的请求；超时后才到的响应找不到记录，会被忽略。
             auto sync_it = m_pending_calls.find(session);
             if (sync_it != m_pending_calls.end()) {
                 sync = sync_it->second;
@@ -629,6 +688,13 @@ private:
         const ComRet status = msg->get_message_type() == vsomeip::message_type_e::MT_RESPONSE
                                   ? ComRet::OK : ComRet::INTERNAL_ERR;
         auto bytes = payload_bytes(msg);
+#ifdef ARA_COM_RPC_COMPLETION_TRACE
+        if (msg->get_service() == 0x1234 && msg->get_instance() == 1
+            && msg->get_method() == 0x0102 && bytes.size() == 32) {
+            rpc_trace(sync ? "SYNC_RESPONSE" : (async ? "RESPONSE_CLAIMED" : "RESPONSE_IGNORED"),
+                      rpc_trace_id(bytes), session, trace_received_us);
+        }
+#endif
         if (sync) {
             std::lock_guard<std::mutex> lock(sync->mutex);
             sync->status = status;
@@ -670,6 +736,7 @@ private:
     bool m_registered{false};
 
     std::map<std::uint64_t, MethodHandler> m_method_handlers;
+    std::map<std::uint64_t, std::pair<MajorVersion, MinorVersion>> m_offered_services;
     std::map<std::uint64_t, EventCallback>  m_event_callbacks;
     std::set<std::uint64_t> m_offered_events;
     std::set<std::uint64_t> m_response_handlers;

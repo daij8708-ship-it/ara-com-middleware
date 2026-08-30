@@ -64,7 +64,7 @@ AsyncLogger& AsyncLogger::instance() {
 
 bool AsyncLogger::init(LogLevel min_level, const std::string& log_file_path, std::size_t max_queue) {
     if (m_initialized.load()) {
-        return false;  // Already initialized
+        return false;  // 已经初始化
     }
 
     m_min_level.store(min_level);
@@ -116,7 +116,7 @@ void AsyncLogger::log(LogLevel level, const std::string& tag, const std::string&
     }
 
     if (level < m_min_level.load()) {
-        return;  // Filtered out
+        return;  // 低于当前日志级别，跳过
     }
 
     LogEntry entry;
@@ -165,7 +165,7 @@ void AsyncLogger::writer_thread() {
                 std::lock_guard<std::mutex> file_lock(m_file_mutex);
                 if (m_log_file.is_open()) {
                     m_log_file << line.str() << std::endl;
-                    m_log_file.flush();  // Flush immediately for crash resilience
+                    m_log_file.flush();  // 及时刷出日志，尽量减少异常退出时的丢失
                 }
             }
 

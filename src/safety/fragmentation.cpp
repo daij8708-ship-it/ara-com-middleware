@@ -156,7 +156,7 @@ ComRet MessageReassembler::process_fragment(const std::vector<std::uint8_t>& fra
         ARA_LOG_DEBUG("FRAG", "Reassembled message msg_id=" + std::to_string(msg_id) +
                       " total=" + std::to_string(complete.size()) + "B");
 
-        // Deliver
+        // 完整消息组好后交给回调
         callback = m_callback;
         m_buffers.erase(key);
     }

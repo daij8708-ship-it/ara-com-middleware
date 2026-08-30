@@ -88,7 +88,7 @@ bool SharedMemoryChannel::receive(std::vector<std::uint8_t>& data) {
 
     auto& queue = s_queues[m_name];
     if (queue.empty()) {
-        return false;  // No messages available
+        return false;  // 当前没有可读消息
     }
 
     data = std::move(queue.front());

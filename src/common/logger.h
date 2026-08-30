@@ -29,7 +29,7 @@ namespace logger {
 /// 包含时间、级别、标签和消息的单条日志
 struct LogEntry {
     LogLevel     level;
-    std::string  tag;      ///< Module/component tag (e.g. "SKELETON", "PROXY")
+    std::string  tag;      ///< 模块标签，例如 SKELETON、PROXY
     std::string  message;
     std::string  timestamp;
 };

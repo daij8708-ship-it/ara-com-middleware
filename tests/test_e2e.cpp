@@ -2,9 +2,8 @@
  * @file    test_e2e.cpp
  * @brief   E2E 保护单元测试。
  *
- * Tests CRC-8 calculation, protect/check round-trip,
- * counter progression, CRC mismatch detection, and
- * validation of corrupted data.
+ * 检查 CRC-8 计算、添加保护后的校验、计数器推进，
+ * 以及数据被篡改时能否发现错误。
  */
 
 #include "safety/e2e.h"
@@ -26,7 +25,7 @@ TEST(E2ETest, Crc8KnownVector) {
     std::vector<std::uint8_t> zero = {0x00};
     EXPECT_EQ(e2e_crc8(zero), 0x00);
 
-    // CRC-8 of known pattern
+    // 固定输入的 CRC-8
     std::vector<std::uint8_t> data = {0x01, 0x02, 0x03};
     std::uint8_t crc = e2e_crc8(data);
     // CRC 结果应保持确定性
@@ -37,11 +36,11 @@ TEST(E2ETest, Crc8WithInitial) {
     std::vector<std::uint8_t> data = {0xAA, 0xBB};
     std::uint8_t crc1 = e2e_crc8(data);
     std::uint8_t crc2 = e2e_crc8_with_initial(0xFF, data);
-    EXPECT_NE(crc1, crc2);  // Different initial values -> different CRCs
+    EXPECT_NE(crc1, crc2);  // 这里检查不同初值是否得到不同结果
 }
 
 // =========================================================================
-//  E2E protect + check round-trip
+//  添加 E2E 保护后再校验
 // =========================================================================
 
 TEST(E2ETest, ProtectAndCheckRoundTrip) {
@@ -50,10 +49,10 @@ TEST(E2ETest, ProtectAndCheckRoundTrip) {
 
     std::vector<std::uint8_t> original = {0x10, 0x20, 0x30, 0x40, 0x50};
 
-    // Protect
+    // 添加保护头
     std::vector<std::uint8_t> protected_data = protector.protect(original);
 
-    // Should be 2 bytes larger (E2E header)
+    // 增加的两个字节是 E2E 头
     ASSERT_EQ(protected_data.size(), original.size() + E2E_HEADER_SIZE);
 
     // 校验
@@ -64,7 +63,7 @@ TEST(E2ETest, ProtectAndCheckRoundTrip) {
 }
 
 // =========================================================================
-//  Corruption detection
+//  检查数据篡改
 // =========================================================================
 
 TEST(E2ETest, DetectCorruption) {
@@ -98,7 +97,7 @@ TEST(E2ETest, DetectTruncation) {
 }
 
 // =========================================================================
-//  Counter progression
+//  计数器推进
 // =========================================================================
 
 TEST(E2ETest, CounterProgression) {
@@ -117,25 +116,25 @@ TEST(E2ETest, CounterProgression) {
 }
 
 // =========================================================================
-//  Counter reset
+//  计数器重置
 // =========================================================================
 
 TEST(E2ETest, ResetCounter) {
     E2EProtector protector;
 
-    // Advance counter a few steps
+    // 先推进几次计数器
     for (int i = 0; i < 5; ++i) {
         protector.protect({0x00});
     }
 
-    // Reset
+    // 重置
     protector.reset_counter();
     auto data = protector.protect({0x42});
-    EXPECT_EQ(data[0] & 0xF0, 0x00);  // Counter byte upper nibble should be 0
+    EXPECT_EQ(data[0] & 0xF0, 0x00);  // 重置后计数器字节的高 4 位应为 0
 }
 
 // =========================================================================
-//  Empty data
+//  空数据
 // =========================================================================
 
 TEST(E2ETest, EmptyPayload) {

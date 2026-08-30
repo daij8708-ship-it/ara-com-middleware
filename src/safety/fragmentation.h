@@ -4,7 +4,7 @@
  *
  * 将超大负载拆分为不超过 MTU 的分片，并在接收端重新组装。
  *
- * Frame format (per fragment):
+ * 每个分片的格式：
  *   [msg_id:2B] [total_frags:1B] [frag_index:1B] [payload_len:2B] [payload:N]
  *
  */
@@ -33,7 +33,7 @@ constexpr std::uint16_t DEFAULT_MTU = 1400;
 constexpr std::uint16_t FRAG_PAYLOAD_SIZE = DEFAULT_MTU - FRAG_HEADER_SIZE;
 
 // =========================================================================
-//  Fragmenter (Sender side)
+//  发送端分片器
 // =========================================================================
 
 /**
@@ -58,7 +58,7 @@ private:
 };
 
 // =========================================================================
-//  Reassembler (Receiver side)
+//  接收端重组器
 // =========================================================================
 
 /**
@@ -89,7 +89,7 @@ public:
     ComRet process_fragment(const std::vector<std::uint8_t>& fragment_data,
                             std::uint32_t sender_id);
 
-    /// Clean up stale reassembly buffers
+    /// 清理过期的未完成消息缓存
     void cleanup_expired(std::uint32_t timeout_ms = 5000);
 
 private:
