@@ -76,5 +76,17 @@
         "initial_delay_ms": 100,
         "max_delay_ms": 5000,
         "backoff_multiplier": 2
+    },
+
+    "resume": {
+        "_comment": "事件断点续收（项目自定义扩展，非标准 ara::com）。默认关闭。",
+        "enabled": false,
+        "buffer_size": 64
+    },
+
+    "idempotency": {
+        "_comment": "同步 RPC 至多一次：请求带 64 位 key，服务端按 key 去重（项目自定义扩展）。默认关闭。",
+        "enabled": false,
+        "window_size": 64
     }
 }

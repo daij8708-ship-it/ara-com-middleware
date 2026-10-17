@@ -44,9 +44,12 @@ void HeartbeatProvider::start(std::uint32_t interval_ms, SendCallback send_cb) {
 }
 
 void HeartbeatProvider::stop() {
-    if (!m_running.load()) return;
-
-    m_running.store(false);
+    {
+        // 锁内改状态再 notify，否则丢唤醒会让后台线程睡满整个间隔才退。
+        std::lock_guard<std::mutex> lock(m_wait_mutex);
+        if (!m_running.load()) return;
+        m_running.store(false);
+    }
     m_wait_cv.notify_all();
     if (m_thread.joinable()) {
         m_thread.join();
@@ -92,9 +95,12 @@ void HeartbeatMonitor::start(std::uint32_t timeout_ms, TimeoutCallback on_timeou
 }
 
 void HeartbeatMonitor::stop() {
-    if (!m_running.load()) return;
-
-    m_running.store(false);
+    {
+        // 同 Provider：锁内改状态再 notify，消除丢唤醒窗口。
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_running.load()) return;
+        m_running.store(false);
+    }
     m_wait_cv.notify_all();
     if (m_thread.joinable()) {
         m_thread.join();

@@ -43,16 +43,19 @@ bool ServiceProxy::init() {
             // 收到 AVAILABLE 才能确认服务真正恢复。
             return false;
         },
-        // 恢复后重新订阅 Event
+        // 恢复后重新订阅 Event，并补收断连期间漏掉的事件
         [this]() {
             ARA_LOG_INFO("PROXY", "Reconnected — re-subscribing events");
-            std::lock_guard<std::mutex> lock(m_mutex);
-            for (auto& [eid, cb] : m_transport_callbacks) {
-                m_backend->subscribe_event(
-                    m_config.service_id, m_config.instance_id,
-                    eid, 1, cb);
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                for (auto& [eid, cb] : m_transport_callbacks) {
+                    m_backend->subscribe_event(
+                        m_config.service_id, m_config.instance_id,
+                        eid, 1, cb);
+                }
+                for (auto& entry : m_e2e_checkers) entry.second->reset();
             }
-            for (auto& entry : m_e2e_checkers) entry.second->reset();
+            resume_subscriptions_async();
         });
 
     // 注册服务可用性回调
@@ -195,6 +198,7 @@ void ServiceProxy::dispatch_complete_event(EventId event_id,
                                             const std::vector<std::uint8_t>& data) {
     EventCallback callback;
     std::vector<std::uint8_t> payload = data;
+    bool deliver = true;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_e2e_enabled) {
@@ -206,10 +210,137 @@ void ServiceProxy::dispatch_complete_event(EventId event_id,
                 return;
             }
         }
+
+        if (m_resume_enabled) {
+            if (payload.size() < safety::RESUME_SEQ_HEADER_SIZE) {
+                ARA_LOG_WARN("PROXY", "Sequenced event too short for event " +
+                             std::to_string(event_id));
+                return;
+            }
+            const std::uint32_t seq = safety::decode_seq(payload);
+            payload.erase(payload.begin(),
+                          payload.begin() + safety::RESUME_SEQ_HEADER_SIZE);
+            auto last = m_last_seq.find(event_id);
+            if (last != m_last_seq.end() && seq <= last->second) {
+                // 回放与实时流可能重叠：序号不大于已见过的，说明是重复，丢弃。
+                deliver = false;
+            } else {
+                m_last_seq[event_id] = seq;
+            }
+        }
+
         auto it = m_event_callbacks.find(event_id);
         if (it != m_event_callbacks.end()) callback = it->second;
     }
-    if (callback) callback(payload);
+    if (deliver && callback) callback(payload);
+}
+
+void ServiceProxy::on_resume_gap(std::function<void(EventId, std::uint32_t)> callback) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_resume_gap_callback = std::move(callback);
+}
+
+safety::ResumeStatus ServiceProxy::request_resume(EventId event_id, std::uint32_t timeout_ms) {
+    if (!m_resume_enabled) {
+        ARA_LOG_WARN("PROXY", "Resume requested while disabled for event " +
+                     std::to_string(event_id));
+        return safety::ResumeStatus::GAP;
+    }
+
+    std::uint32_t last_seq = safety::RESUME_SEQ_UNKNOWN;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_last_seq.find(event_id);
+        if (it != m_last_seq.end()) last_seq = it->second;
+    }
+
+    const auto request = safety::encode_resume_request(event_id, last_seq);
+    std::vector<std::uint8_t> response;
+    const ComRet ret = m_backend->call_method_sync(
+        m_config.service_id, m_config.instance_id, safety::RESUME_METHOD_ID,
+        request, response, timeout_ms);
+    if (ret != ComRet::OK) {
+        ARA_LOG_WARN("PROXY", "Resume request failed for event " +
+                     std::to_string(event_id));
+        return safety::ResumeStatus::GAP;
+    }
+
+    safety::ResumeStatus status = safety::ResumeStatus::GAP;
+    std::uint16_t count = 0;
+    std::uint32_t earliest = safety::RESUME_SEQ_UNKNOWN;
+    if (!safety::decode_resume_response(response, status, count, earliest)) {
+        ARA_LOG_WARN("PROXY", "Malformed resume response for event " +
+                     std::to_string(event_id));
+        return safety::ResumeStatus::GAP;
+    }
+
+    ARA_LOG_INFO("PROXY", "Resume event=" + std::to_string(event_id) +
+                 " replayed=" + std::to_string(count) +
+                 " status=" + std::to_string(static_cast<int>(status)));
+    if (status == safety::ResumeStatus::GAP) {
+        std::function<void(EventId, std::uint32_t)> cb;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            cb = m_resume_gap_callback;
+        }
+        if (cb) cb(event_id, earliest);
+    }
+    return status;
+}
+
+std::uint64_t ServiceProxy::next_request_key() {
+    return ++m_request_key_counter;
+}
+
+std::vector<std::uint8_t> ServiceProxy::frame_request(
+    std::uint64_t key, const std::vector<std::uint8_t>& payload) const {
+    if (!m_rpc_idempotency_enabled) {
+        return payload;
+    }
+    std::vector<std::uint8_t> framed = safety::encode_request_key(key);
+    framed.insert(framed.end(), payload.begin(), payload.end());
+    return framed;
+}
+
+void ServiceProxy::resume_subscriptions_async() {
+    if (!m_resume_enabled) return;
+
+    std::vector<std::pair<EventId, std::uint32_t>> targets;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (const auto& entry : m_transport_callbacks) {
+            auto last = m_last_seq.find(entry.first);
+            targets.emplace_back(entry.first,
+                                 last == m_last_seq.end() ? safety::RESUME_SEQ_UNKNOWN
+                                                          : last->second);
+        }
+    }
+
+    for (const auto& target : targets) {
+        const auto request = safety::encode_resume_request(target.first, target.second);
+        m_backend->call_method_async(
+            m_config.service_id, m_config.instance_id, safety::RESUME_METHOD_ID,
+            request,
+            [this, event_id = target.first](ComRet status,
+                                            const std::vector<std::uint8_t>& response) {
+                if (status != ComRet::OK) return;
+                safety::ResumeStatus resumed = safety::ResumeStatus::GAP;
+                std::uint16_t count = 0;
+                std::uint32_t earliest = safety::RESUME_SEQ_UNKNOWN;
+                if (!safety::decode_resume_response(response, resumed, count, earliest)) return;
+                ARA_LOG_INFO("PROXY", "Auto-resume event=" + std::to_string(event_id) +
+                             " replayed=" + std::to_string(count));
+                if (resumed == safety::ResumeStatus::GAP) {
+                    std::function<void(EventId, std::uint32_t)> cb;
+                    {
+                        std::lock_guard<std::mutex> lock(m_mutex);
+                        cb = m_resume_gap_callback;
+                    }
+                    if (cb) cb(event_id, earliest);
+                }
+            },
+            2000);
+    }
 }
 
 } // namespace com

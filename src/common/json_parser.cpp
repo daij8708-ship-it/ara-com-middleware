@@ -349,6 +349,22 @@ bool JsonConfigParser::load_string(const std::string& json_string) {
                 json_to_number(find_member(*recon_node, "backoff_multiplier"), 2.0));
         }
 
+        // 解析 resume 配置（断点续收，项目自定义扩展；默认关闭）
+        const JsonValue* resume_node = find_member(root, "resume");
+        if (resume_node) {
+            m_resume_enabled = json_to_bool(find_member(*resume_node, "enabled"), false);
+            m_resume_buffer_size = static_cast<std::size_t>(
+                json_to_number(find_member(*resume_node, "buffer_size"), 64.0));
+        }
+
+        // 解析 idempotency 配置（同步 RPC 至多一次；默认关闭）
+        const JsonValue* idem_node = find_member(root, "idempotency");
+        if (idem_node) {
+            m_rpc_idempotency_enabled = json_to_bool(find_member(*idem_node, "enabled"), false);
+            m_idempotency_window_size = static_cast<std::size_t>(
+                json_to_number(find_member(*idem_node, "window_size"), 64.0));
+        }
+
         return true;
 
     } catch (const ComException& e) {

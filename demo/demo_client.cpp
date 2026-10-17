@@ -77,6 +77,8 @@ int main(int argc, char* argv[]) {
     ServiceProxy proxy(backend, client_cfg, parser.e2e_config());
     proxy.set_e2e_enabled(parser.e2e_config().enabled);
     proxy.set_fragmentation_enabled(parser.fragmentation_enabled());
+    proxy.set_resume_enabled(parser.resume_enabled());
+    proxy.set_rpc_idempotency_enabled(parser.rpc_idempotency_enabled());
     proxy.configure_connection_safety(
         parser.heartbeat_enabled(), parser.heartbeat_timeout_ms(),
         parser.reconnect_enabled(), parser.reconnect_initial_delay_ms(),

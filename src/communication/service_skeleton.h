@@ -24,7 +24,10 @@
 #include "safety/e2e.h"
 #include "safety/fragmentation.h"
 #include "safety/heartbeat.h"
+#include "safety/idempotency.h"
+#include "safety/resume.h"
 
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <memory>
@@ -125,9 +128,30 @@ public:
     /// 启用心跳
     void enable_heartbeat(std::uint32_t interval_ms);
 
+    /// 启用事件断点续收：发布时加 32 位序号、缓存最近若干条、注册续收 Method
+    void set_resume_enabled(bool enabled) { m_resume_enabled = enabled; }
+
+    /// 设置每个 Event 的续收缓存容量；0 表示不缓存（只发序号，无法回放）
+    void set_resume_buffer_size(std::size_t capacity) { m_resume_buffer_capacity = capacity; }
+
+    /// 启用同步 RPC 的"至多一次"：方法请求带 64 位 key，服务端按 key 去重
+    void set_rpc_idempotency_enabled(bool enabled) { m_rpc_idempotency_enabled = enabled; }
+
+    /// 设置每个方法的去重窗口容量；0 表示不记录（等于不去重）
+    void set_idempotency_window_size(std::size_t capacity) {
+        m_idempotency_window_size = capacity;
+    }
+
 private:
     // 负责序列化与反序列化的内部 Method 处理入口
     void register_method_internal(MethodId method_id, MethodHandler handler);
+
+    // 发送一条事件的最终字节：可选序号头 → E2E 保护 → 分片 → 后端
+    bool emit_event(EventId event_id, const std::vector<std::uint8_t>& business,
+                    bool with_seq, std::uint32_t seq);
+
+    // 续收 Method 的处理：把缓存里比 last_seq 新的条目按原序号重新发一遍
+    std::vector<std::uint8_t> handle_resume_request(const std::vector<std::uint8_t>& request);
 
     // 发送前执行 E2E 保护和分片
     std::vector<std::vector<std::uint8_t>> prepare_outgoing(const std::vector<std::uint8_t>& raw_data);
@@ -146,6 +170,20 @@ private:
     std::unique_ptr<safety::E2EProtector> m_e2e_protector;
     std::unique_ptr<safety::MessageFragmenter> m_fragmenter;
     std::unique_ptr<safety::HeartbeatProvider> m_heartbeat;
+
+    // 断点续收：序号分配、缓存和续收 Method
+    bool m_resume_enabled{false};
+    std::size_t m_resume_buffer_capacity{0};
+    std::mutex m_emit_mutex;     // 串行化 E2E 保护器和分片器，发布与回放共用
+    std::mutex m_resume_mutex;   // 保护序号与缓存
+    std::map<EventId, std::uint32_t> m_next_seq;
+    std::map<EventId, safety::EventSequenceBuffer> m_resume_buffers;
+
+    // 同步 RPC 的至多一次：按方法维护 (key -> 响应) 去重窗口
+    bool m_rpc_idempotency_enabled{false};
+    std::size_t m_idempotency_window_size{0};
+    std::mutex m_idempotency_mutex;
+    std::map<MethodId, safety::IdempotencyWindow> m_idempotency_windows;
 
     std::mutex m_mutex;
 };

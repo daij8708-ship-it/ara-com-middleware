@@ -25,17 +25,23 @@
 
 #include "common/types.h"
 #include "common/exception.h"
+#include "common/logger.h"
 #include "runtime.h"
 #include "safety/e2e.h"
 #include "safety/fragmentation.h"
 #include "safety/heartbeat.h"
+#include "safety/idempotency.h"
 #include "safety/reconnect.h"
+#include "safety/resume.h"
 
+#include <atomic>
+#include <cstdint>
 #include <functional>
 #include <future>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 namespace ara {
 namespace com {
@@ -127,6 +133,17 @@ public:
                            MethodReplyCallback callback,
                            std::uint32_t timeout_ms = 5000);
 
+    /**
+     * @brief 幂等的同步调用：超时时用同一个请求 key 重试，服务端按 key 去重。
+     *
+     * 需要两侧都启用 set_rpc_idempotency_enabled(true)；未启用时退化为单次调用。
+     * 只在 TIMEOUT / NOT_AVAILABLE 时重试，其余错误立即上抛。
+     */
+    template<typename ReqT, typename RspT>
+    RspT call_method_sync_idempotent(MethodId method_id, const ReqT& request,
+                                     std::uint32_t timeout_ms = 5000,
+                                     unsigned max_attempts = 2);
+
     // ---- 服务可用性 ----
 
     /// 查询服务当前是否可用
@@ -149,10 +166,32 @@ public:
                                      std::uint32_t max_delay_ms,
                                      std::uint32_t multiplier);
 
+    /// 启用事件断点续收：必须与对端 Skeleton 一致（否则收不到序号头）
+    void set_resume_enabled(bool enabled) { m_resume_enabled = enabled; }
+
+    /// 启用同步 RPC 的"至多一次"：方法请求带 64 位 key，必须与对端一致
+    void set_rpc_idempotency_enabled(bool enabled) { m_rpc_idempotency_enabled = enabled; }
+
+    /// 对单个 Event 主动发起一次续收请求；返回服务端的回放结论
+    safety::ResumeStatus request_resume(EventId event_id, std::uint32_t timeout_ms = 2000);
+
+    /// 续收发现缺口时的通知回调；参数为服务端现存的最早序号
+    void on_resume_gap(std::function<void(EventId, std::uint32_t)> callback);
+
 private:
     // 对收到的 Event 字节执行分片重组与 E2E 校验
     void on_raw_event_received(EventId event_id, const std::vector<std::uint8_t>& data);
     void dispatch_complete_event(EventId event_id, const std::vector<std::uint8_t>& data);
+
+    // 重连恢复后，对所有已订阅事件自动发起一次续收
+    void resume_subscriptions_async();
+
+    // 生成下一个请求 key（进程内单调）
+    std::uint64_t next_request_key();
+
+    // 启用至多一次时给请求加 8 字节 key 前缀；否则原样返回
+    std::vector<std::uint8_t> frame_request(
+        std::uint64_t key, const std::vector<std::uint8_t>& payload) const;
 
     std::shared_ptr<runtime::ICommunicationBackend> m_backend;
     ServiceConfig m_config;
@@ -164,6 +203,15 @@ private:
     bool m_heartbeat_enabled{true};
     bool m_reconnect_enabled{true};
     std::uint32_t m_heartbeat_timeout_ms{3000};
+
+    // 断点续收：已见过的最大序号，以及缺口通知
+    bool m_resume_enabled{false};
+    std::map<EventId, std::uint32_t> m_last_seq;
+    std::function<void(EventId, std::uint32_t)> m_resume_gap_callback;
+
+    // 同步 RPC 至多一次：请求 key 生成
+    bool m_rpc_idempotency_enabled{false};
+    std::atomic<std::uint64_t> m_request_key_counter{0};
 
     std::atomic<ServiceAvailability> m_availability{ServiceAvailability::UNKNOWN};
 
@@ -203,8 +251,9 @@ void ServiceProxy::subscribe_event(EventId event_id,
 template<typename ReqT, typename RspT>
 RspT ServiceProxy::call_method_sync(MethodId method_id, const ReqT& request,
                                     std::uint32_t timeout_ms) {
-    // 序列化请求
-    std::vector<std::uint8_t> req_bytes = request.serialize();
+    // 序列化请求；启用至多一次时在前面加一个本次调用专属的请求 key
+    const std::vector<std::uint8_t> req_bytes = frame_request(
+        next_request_key(), request.serialize());
 
     std::vector<std::uint8_t> rsp_bytes;
     ComRet ret = m_backend->call_method_sync(
@@ -224,10 +273,44 @@ RspT ServiceProxy::call_method_sync(MethodId method_id, const ReqT& request,
 }
 
 template<typename ReqT, typename RspT>
+RspT ServiceProxy::call_method_sync_idempotent(MethodId method_id, const ReqT& request,
+                                               std::uint32_t timeout_ms,
+                                               unsigned max_attempts) {
+    if (!m_rpc_idempotency_enabled) {
+        ARA_LOG_WARN("PROXY", "Idempotent call requested while disabled; single attempt only");
+        return call_method_sync<ReqT, RspT>(method_id, request, timeout_ms);
+    }
+    if (max_attempts == 0) max_attempts = 1;
+
+    // 一次逻辑调用只用一个 key：重试复用，服务端才能把重试认成同一次调用。
+    const std::uint64_t key = next_request_key();
+    const std::vector<std::uint8_t> payload = request.serialize();
+
+    ComRet last = ComRet::INTERNAL_ERR;
+    for (unsigned attempt = 0; attempt < max_attempts; ++attempt) {
+        std::vector<std::uint8_t> rsp_bytes;
+        last = m_backend->call_method_sync(
+            m_config.service_id, m_config.instance_id, method_id,
+            frame_request(key, payload), rsp_bytes, timeout_ms);
+        if (last == ComRet::OK) return RspT::deserialize(rsp_bytes);
+        // 只有"没有确定答复"的情况才重试；其它错误立即上抛。
+        if (last != ComRet::TIMEOUT && last != ComRet::NOT_AVAILABLE) break;
+    }
+
+    if (last == ComRet::TIMEOUT) {
+        throw TimeoutException("Idempotent method call " + std::to_string(method_id) +
+                               " timed out after " + std::to_string(max_attempts) + " attempt(s)");
+    }
+    throw ServiceNotAvailableException("Idempotent method call " + std::to_string(method_id) +
+                                       " failed: code=" + std::to_string(static_cast<int>(last)));
+}
+
+template<typename ReqT, typename RspT>
 void ServiceProxy::call_method_async(MethodId method_id, const ReqT& request,
                                      MethodReplyCallback callback,
                                      std::uint32_t timeout_ms) {
-    std::vector<std::uint8_t> req_bytes = request.serialize();
+    const std::vector<std::uint8_t> req_bytes = frame_request(
+        next_request_key(), request.serialize());
 
     m_backend->call_method_async(
         m_config.service_id, m_config.instance_id,

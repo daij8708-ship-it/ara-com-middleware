@@ -8,6 +8,8 @@ set(TEST_SOURCES
     test_proxy.cpp
     test_concurrency.cpp
     test_reliability.cpp
+    test_resume.cpp
+    test_idempotency.cpp
 )
 
 add_executable(ara_com_tests ${TEST_SOURCES})

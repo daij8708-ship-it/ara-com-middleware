@@ -9,6 +9,7 @@
 
 #include "types.h"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -103,6 +104,14 @@ public:
     std::uint32_t reconnect_max_delay_ms() const { return m_reconnect_max_delay_ms; }
     std::uint32_t reconnect_backoff_multiplier() const { return m_reconnect_backoff_multiplier; }
 
+    /// 断点续收（默认关闭，需要在配置里显式打开）
+    bool resume_enabled() const { return m_resume_enabled; }
+    std::size_t resume_buffer_size() const { return m_resume_buffer_size; }
+
+    /// 同步 RPC 至多一次（默认关闭，需要在配置里显式打开）
+    bool rpc_idempotency_enabled() const { return m_rpc_idempotency_enabled; }
+    std::size_t idempotency_window_size() const { return m_idempotency_window_size; }
+
 private:
     void parse_e2e(const std::string& json_str);
     void parse_globals(const std::string& json_str);
@@ -120,6 +129,14 @@ private:
     std::uint32_t m_reconnect_initial_delay_ms{100};
     std::uint32_t m_reconnect_max_delay_ms{5000};
     std::uint32_t m_reconnect_backoff_multiplier{2};
+
+    // 断点续收：默认关闭；容量缺省 64 条，仅作上限，实际以配置为准
+    bool        m_resume_enabled{false};
+    std::size_t m_resume_buffer_size{64};
+
+    // 同步 RPC 至多一次：默认关闭
+    bool        m_rpc_idempotency_enabled{false};
+    std::size_t m_idempotency_window_size{64};
 };
 
 } // namespace config

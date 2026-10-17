@@ -116,6 +116,14 @@ int main(int argc, char* argv[]) {
         skeleton.set_mtu(parser.fragmentation_mtu());
     }
 
+    // 断点续收（默认关闭，需在 services.json 里显式打开）
+    skeleton.set_resume_enabled(parser.resume_enabled());
+    skeleton.set_resume_buffer_size(parser.resume_buffer_size());
+
+    // 同步 RPC 至多一次（默认关闭）
+    skeleton.set_rpc_idempotency_enabled(parser.rpc_idempotency_enabled());
+    skeleton.set_idempotency_window_size(parser.idempotency_window_size());
+
     // 启动服务
     if (!skeleton.start()) {
         ARA_LOG_FATAL("DEMO_SERVER", "Failed to start service");

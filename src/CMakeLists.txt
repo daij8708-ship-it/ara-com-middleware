@@ -9,6 +9,8 @@ set(ARA_COM_SOURCES
     safety/fragmentation.cpp
     safety/heartbeat.cpp
     safety/reconnect.cpp
+    safety/resume.cpp
+    safety/idempotency.cpp
 
     # 通信层
     communication/runtime.cpp
