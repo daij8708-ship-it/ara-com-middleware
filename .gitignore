@@ -9,6 +9,10 @@
 compile_commands.json
 /artifacts/
 /tests/reports/
+/ara-com-monitor.exe
+/launcher/bin/
+/launcher/obj/
+/launcher/dist/
 __pycache__/
 *.py[cod]
 .pytest_cache/

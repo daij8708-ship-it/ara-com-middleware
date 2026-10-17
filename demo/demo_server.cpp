@@ -20,11 +20,14 @@
 #include "communication/runtime.h"
 #include "communication/service_skeleton.h"
 #include "demo_data_types.h"
+#include "demo_observability.h"
 
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <thread>
 
 using namespace ara::com;
@@ -37,10 +40,6 @@ void signal_handler(int /*sig*/) {
 }
 
 int main(int argc, char* argv[]) {
-    // ---- 初始化日志 ----
-    logger::AsyncLogger::instance().init(LogLevel::DEBUG, "demo_server.log");
-    ARA_LOG_INFO("DEMO_SERVER", "===== ara::com Demo Server Starting =====");
-
     // ---- 解析配置 ----
     std::string config_path = (argc > 1) ? argv[1] : "../config/services.json";
     config::JsonConfigParser parser;
@@ -55,6 +54,20 @@ int main(int argc, char* argv[]) {
         ARA_LOG_FATAL("DEMO_SERVER", "Server config not found for service 0x1234");
         return 1;
     }
+
+    // ---- 初始化日志与监测 ----
+    // 设置监测环境变量时由 Observability 接管 JSONL 日志和指标快照，
+    // 否则保持原来的文本日志行为。
+    const char* role_env = std::getenv("ARA_COM_DEMO_ROLE");
+    const std::string role = (role_env && *role_env) ? role_env : "vsomeip-server";
+    std::unique_ptr<demo::Observability> observability;
+    if (std::getenv("ARA_COM_LOG_DIR") || std::getenv("ARA_COM_METRICS_DIR")) {
+        observability = std::make_unique<demo::Observability>(
+            role, "vsomeip", svc_cfg->service_id, svc_cfg->instance_id);
+    } else {
+        logger::AsyncLogger::instance().init(LogLevel::DEBUG, "demo_server.log");
+    }
+    ARA_LOG_INFO("DEMO_SERVER", "===== ara::com Demo Server Starting =====");
 
     // ---- 创建通信后端 ----
 #ifdef ARA_COM_USE_VSOMEIP

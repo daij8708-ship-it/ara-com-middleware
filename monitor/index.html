@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ara-com 运行监测</title>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --panel: #ffffff;
+    --line: #e3e8ee;
+    --text: #1f2933;
+    --muted: #6b7785;
+    --accent: #1f6feb;
+    --ok: #1a7f37;
+    --warn: #b26a00;
+    --err: #c62828;
+    --mono: "Cascadia Mono", "Consolas", "SFMono-Regular", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    font-size: 14px;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: 18px 24px 14px;
+  }
+  .title-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .5px; }
+  .subtitle { color: var(--muted); font-size: 13px; }
+  .run-dir {
+    margin-top: 8px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    word-break: break-all;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .toolbar label { color: var(--muted); user-select: none; }
+  .tabs {
+    display: inline-flex;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .tab {
+    border: 0;
+    border-radius: 0;
+    padding: 7px 16px;
+    background: #fff;
+    color: var(--muted);
+  }
+  .tab + .tab { border-left: 1px solid var(--line); }
+  .tab.active, .tab.active:hover { background: var(--accent); color: #fff; }
+  button, .button {
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    text-decoration: none;
+  }
+  button:hover, .button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  button.primary:hover { color: #fff; opacity: .9; }
+  button.danger { color: var(--err); border-color: #efc9c9; }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  button:disabled, button:disabled:hover {
+    opacity: .45;
+    cursor: not-allowed;
+    border-color: var(--line);
+    color: var(--text);
+  }
+  .control-grid { display: flex; flex-direction: column; gap: 10px; }
+  .control-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .control-label { color: var(--muted); font-size: 12px; min-width: 50px; }
+  .control-row select {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+    background: #fff;
+    color: var(--text);
+    max-width: 100%;
+    min-width: 320px;
+  }
+  .control-row input[type="number"] {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+    background: #fff;
+    color: var(--text);
+    width: 100px;
+  }
+  .job-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .job {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    flex-wrap: wrap;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .status-running { color: var(--accent); }
+  .status-succeeded { color: var(--ok); }
+  .status-failed { color: var(--err); }
+  .status-stopped { color: var(--warn); }
+  .action-log {
+    margin: 10px 0 0;
+    padding: 10px 12px;
+    background: #0f1720;
+    color: #d7e2ec;
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .action-log.empty { color: #7d8b99; }
+  main { padding: 18px 24px 40px; max-width: 1440px; margin: 0 auto; }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    min-height: 86px;
+  }
+  .card .label { color: var(--muted); font-size: 12px; }
+  .card .value {
+    font-family: var(--mono);
+    font-size: 24px;
+    margin-top: 6px;
+    line-height: 1.1;
+  }
+  .card .hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .table-wrap { width: 100%; overflow-x: auto; }
+  .card.accent .value { color: var(--accent); }
+  .card.ok .value { color: var(--ok); }
+  .card.warn .value { color: var(--warn); }
+  .card.err .value { color: var(--err); }
+  section.panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-top: 16px;
+    overflow: hidden;
+  }
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .panel-head h2 { font-size: 15px; margin: 0; font-weight: 600; }
+  .panel-body { padding: 14px 16px; }
+  .chart-wrap { position: relative; height: 190px; }
+  canvas { width: 100%; height: 100%; display: block; }
+  .legend { display: flex; gap: 18px; color: var(--muted); font-size: 12px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; background: #fafbfc; white-space: nowrap; }
+  td.num { font-family: var(--mono); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .pill.live { color: var(--ok); border-color: #b7dfc4; background: #effaf2; }
+  .pill.done { color: var(--muted); }
+  .pill.bad { color: var(--err); border-color: #f0c2c2; background: #fdf2f2; }
+  .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .filters select, .filters input {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+    background: #fff;
+    color: var(--text);
+  }
+  .filters input[type="search"] { width: 210px; }
+  .log-scroll { max-height: 380px; overflow: auto; }
+  .log-msg { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  .log-time { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .lv { font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #eef2f6; }
+  .lv.WARN { background: #fff4df; color: #8a5200; }
+  .lv.ERROR, .lv.FATAL { background: #fdecec; color: #a61b1b; }
+  .lv.INFO { background: #e9f2ff; color: #1a5bb8; }
+  .lv.DEBUG, .lv.TRACE { background: #f1f3f5; color: #5c6670; }
+  .empty { color: var(--muted); padding: 18px 4px; text-align: center; }
+  .grid-two { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr); gap: 16px; }
+  .note-list { margin: 0; padding-left: 18px; color: var(--muted); line-height: 1.8; }
+  .note-list strong { color: var(--text); font-weight: 600; }
+  @media (max-width: 900px) { .grid-two { grid-template-columns: 1fr; } }
+  @media (max-width: 700px) {
+    .hide-sm { display: none; }
+    .filters input[type="search"] { width: 100%; }
+  }
+  @media (max-width: 520px) {
+    .hide-xs { display: none; }
+    main { padding: 14px 10px 30px; }
+    header { padding: 14px 12px 12px; }
+  }
+  .code-row td:first-child { font-family: var(--mono); width: 130px; }
+  .footer { color: var(--muted); font-size: 12px; margin-top: 18px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<header>
+  <div class="title-row">
+    <h1>ara-com 运行监测</h1>
+    <span class="subtitle">本机面板 · 指标、日志与演示控制</span>
+  </div>
+  <div class="run-dir" id="runDir">等待运行目录...</div>
+  <div class="toolbar">
+    <div class="tabs" role="tablist" aria-label="后端切换">
+      <button class="tab active" type="button" data-backend="">全部</button>
+      <button class="tab" type="button" data-backend="dds">DDS</button>
+      <button class="tab" type="button" data-backend="vsomeip">SOME/IP</button>
+    </div>
+    <label><input type="checkbox" id="autoRefresh" checked> 自动刷新（1 秒）</label>
+    <button id="refreshBtn" type="button">立即刷新</button>
+    <a class="button" id="exportBtn" href="/api/export.csv?limit=2000">导出日志 CSV</a>
+    <span class="subtitle" id="lastUpdate">尚未取到数据</span>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <div class="panel-head">
+      <h2>运行控制</h2>
+      <span class="subtitle" id="actionStatus">正在读取任务状态...</span>
+    </div>
+    <div class="panel-body">
+      <div class="control-grid">
+        <div class="control-row">
+          <span class="control-label">DDS</span>
+          <button type="button" class="primary" id="startDdsBtn">启动 DDS 演示</button>
+          <button type="button" class="danger" id="stopDdsBtn" disabled>停止 DDS</button>
+          <span class="subtitle" id="ddsState">未启动</span>
+        </div>
+        <div class="control-row">
+          <span class="control-label">SOME/IP</span>
+          <button type="button" class="primary" id="startSomeipBtn">启动 SOME/IP 演示</button>
+          <button type="button" class="danger" id="stopSomeipBtn" disabled>停止 SOME/IP</button>
+          <span class="subtitle" id="someipState">未启动</span>
+        </div>
+        <div class="control-row">
+          <span class="control-label">演示时长</span>
+          <input id="demoDuration" type="number" min="5" max="3600" step="5" value="120">
+          <span class="subtitle">秒（5–3600），对 DDS 与 SOME/IP 演示生效，可用于长时间稳定性观察</span>
+        </div>
+        <div class="control-row">
+          <span class="control-label">测试</span>
+          <select id="testSuite" aria-label="测试类型">
+            <optgroup label="快速检查">
+              <option value="quick" selected>快速回归（unit + guards，约 1 分钟）</option>
+              <option value="unit">单元测试（NullBackend）</option>
+              <option value="guards">判定逻辑回归</option>
+              <option value="functional">功能回归（默认档，约 4 分钟）</option>
+            </optgroup>
+            <optgroup label="后端与稳定性">
+              <option value="shm">共享内存（单测 + 压测 + 多客户端）</option>
+              <option value="vsomeip">SOME/IP 端到端（链路 + 并发 + 恢复）</option>
+              <option value="recovery">稳定性：服务停止与恢复</option>
+              <option value="concurrency">并发压测（窗口 4 / 16）</option>
+              <option value="dds">DDS 回归（RTPS/UDP 多进程）</option>
+            </optgroup>
+            <optgroup label="诊断与极限">
+              <option value="asan">ASan/UBSan（内存与未定义行为）</option>
+              <option value="tsan">TSan（数据竞争）</option>
+              <option value="capacity">容量/极限测试（约 21 分钟）</option>
+              <option value="all">全部测试（含 sanitizer，不含容量）</option>
+            </optgroup>
+          </select>
+          <button type="button" class="primary" id="runTestBtn">运行测试</button>
+          <button type="button" class="danger" id="stopTestBtn" disabled>停止测试</button>
+          <span class="subtitle" id="testState">未运行</span>
+        </div>
+      </div>
+      <div class="subtitle" id="actionHint" style="margin-top:8px">
+        启动演示会自动构建对应后端；演示与测试互斥，先停止演示再运行测试。
+        测试按类型单独启动，容量/极限测试约 21 分钟。
+      </div>
+      <div id="jobList" class="job-list"></div>
+      <pre id="actionLog" class="action-log empty">暂无动作记录</pre>
+    </div>
+  </section>
+
+  <div class="cards">
+    <div class="card accent"><div class="label">RPC 提交</div><div class="value" id="rpcTotal">0</div><div class="hint" id="rpcBreakdown">同步 + 异步</div></div>
+    <div class="card ok"><div class="label">成功率</div><div class="value" id="rpcRate">0%</div><div class="hint" id="rpcOk">成功 0</div></div>
+    <div class="card warn"><div class="label">超时</div><div class="value" id="rpcTimeout">0</div><div class="hint">TIMEOUT</div></div>
+    <div class="card err"><div class="label">不可用 / 失败</div><div class="value" id="rpcUnavailable">0</div><div class="hint" id="rpcFailed">失败 0</div></div>
+    <div class="card"><div class="label">平均延迟</div><div class="value" id="avgLatency">0 µs</div><div class="hint" id="maxLatency">最大 0 µs</div></div>
+    <div class="card"><div class="label">在途调用</div><div class="value" id="pendingCalls">0</div><div class="hint">已提交未完成</div></div>
+    <div class="card"><div class="label">Event 发送</div><div class="value" id="eventsSent">0</div><div class="hint" id="eventsSentBytes">0 字节</div></div>
+    <div class="card"><div class="label">Event 接收</div><div class="value" id="eventsReceived">0</div><div class="hint" id="eventsDelivered">交付 0</div></div>
+    <div class="card warn"><div class="label">丢序 / 缺失</div><div class="value" id="eventsMissing">0</div><div class="hint" id="eventsGaps">序号跳变 0 次</div></div>
+    <div class="card err"><div class="label">校验失败</div><div class="value" id="eventsCorrupt">0</div><div class="hint" id="eventsDuplicate">重复 0</div></div>
+    <div class="card"><div class="label">重连 / 断开</div><div class="value" id="reconnects">0</div><div class="hint" id="disconnects">断开 0</div></div>
+    <div class="card"><div class="label">续收回放</div><div class="value" id="resumeReplayed">0</div><div class="hint" id="resumeGaps">缺口 0 · 失败 0</div></div>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>吞吐趋势</h2>
+      <div class="legend">
+        <span><i style="background:#1f6feb"></i>RPC / 秒</span>
+        <span><i style="background:#1a7f37"></i>Event / 秒</span>
+      </div>
+    </div>
+    <div class="panel-body chart-wrap"><canvas id="chart"></canvas></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>进程明细</h2><span class="subtitle" id="processCount">0 个进程</span></div>
+    <div class="panel-body table-wrap" style="padding:0">
+      <table>
+        <thead>
+          <tr>
+            <th>角色</th><th class="hide-sm">服务</th><th>RPC 提交</th><th class="hide-sm">成功</th>
+            <th>超时</th><th>Event 发 / 收</th><th class="hide-sm">重连 / 断开</th><th>状态</th>
+          </tr>
+        </thead>
+        <tbody id="processRows"><tr><td colspan="8" class="empty">等待进程数据...</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>结构化日志</h2>
+      <span class="subtitle" id="logCount">0 条</span>
+    </div>
+    <div class="panel-body">
+      <div class="filters">
+        <select id="levelFilter">
+          <option value="">全部级别</option>
+          <option value="DEBUG">DEBUG 及以上</option>
+          <option value="INFO" selected>INFO 及以上</option>
+          <option value="WARN">WARN 及以上</option>
+          <option value="ERROR">ERROR 及以上</option>
+        </select>
+        <select id="componentFilter"><option value="">全部进程</option></select>
+        <input id="tagFilter" type="search" placeholder="按 tag 过滤（如 PROXY）">
+        <input id="queryFilter" type="search" placeholder="搜索日志内容">
+        <select id="limitFilter">
+          <option value="100">最近 100 条</option>
+          <option value="200" selected>最近 200 条</option>
+          <option value="500">最近 500 条</option>
+          <option value="1000">最近 1000 条</option>
+        </select>
+        <button id="logRefreshBtn" type="button">刷新日志</button>
+      </div>
+      <div class="log-scroll table-wrap" style="margin-top:12px">
+        <table>
+          <thead><tr><th>时间</th><th>级别</th><th class="hide-sm">后端</th><th class="hide-sm">进程</th><th class="hide-sm">Tag</th><th>内容</th></tr></thead>
+          <tbody id="logRows"><tr><td colspan="6" class="empty">等待日志...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <div class="grid-two">
+    <section class="panel">
+      <div class="panel-head"><h2>错误码</h2><span class="subtitle">ComRet</span></div>
+      <div class="panel-body" style="padding:0">
+        <table>
+          <thead><tr><th>码</th><th>名称</th><th>含义</th></tr></thead>
+          <tbody class="code-row">
+            <tr><td>0</td><td>OK</td><td>调用成功</td></tr>
+            <tr><td>1</td><td>TIMEOUT</td><td>超时未收到响应</td></tr>
+            <tr><td>2</td><td>NOT_AVAILABLE</td><td>服务未发布或不可用</td></tr>
+            <tr><td>3</td><td>E2E_ERROR</td><td>端到端校验失败</td></tr>
+            <tr><td>4</td><td>FRAGMENT_ERR</td><td>分片或重组失败</td></tr>
+            <tr><td>5</td><td>INTERNAL_ERR</td><td>框架内部错误</td></tr>
+            <tr><td>6</td><td>NOT_CONNECTED</td><td>连接尚未建立</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>指标口径</h2><span class="subtitle">本机采集</span></div>
+      <div class="panel-body">
+        <ul class="note-list">
+          <li><strong>成功率</strong> = RPC 成功数 / 已提交数，超时和不可用都计入分母。</li>
+          <li><strong>丢序 / 缺失</strong>来自 Event 序号跳变；<strong>续收回放</strong>是断连后服务端按缓存补发的条数。</li>
+          <li><strong>平均延迟</strong>统计已完成调用，包含超时和失败；在途数不参与延迟。</li>
+          <li>同一角色只保留最新一份快照，避免重复启动导致累计翻倍。</li>
+          <li>顶部的 DDS / SOME/IP 切换只过滤当前视图，不会停止另一侧的演示。</li>
+        </ul>
+      </div>
+    </section>
+  </div>
+
+  <div class="footer">
+    数据来源：每个演示进程周期写出 metrics-&lt;role&gt;-&lt;pid&gt;.json，日志按行写成 JSONL。
+    面板默认只读取运行数据；控制按钮只会调用项目内置脚本启动演示或测试，不执行任意命令。
+    同一角色只展示最新一份快照，避免重复启动导致累计翻倍。
+  </div>
+</main>
+
+<script>
+const state = {
+  paused: false,
+  timer: null,
+  history: [],
+  lastTotals: null,
+  lastSampleAt: 0,
+  components: new Set(),
+  backend: '',
+  actions: null,
+  actionLogJobId: null,
+  demoDurationInitialized: false
+};
+
+const $ = id => document.getElementById(id);
+const number = value => new Intl.NumberFormat('zh-CN').format(value || 0);
+const micros = value => {
+  const us = Number(value || 0);
+  if (us >= 1000000) return (us / 1000000).toFixed(2) + ' s';
+  if (us >= 1000) return (us / 1000).toFixed(2) + ' ms';
+  return Math.round(us) + ' µs';
+};
+const escapeHtml = text => String(text == null ? '' : text)
+  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+const timeText = text => {
+  const date = new Date(text || '');
+  return Number.isNaN(date.getTime()) ? String(text || '') : date.toLocaleString('zh-CN');
+};
+
+function filters() {
+  const params = new URLSearchParams();
+  const level = $('levelFilter').value;
+  const component = $('componentFilter').value;
+  const tag = $('tagFilter').value.trim();
+  const query = $('queryFilter').value.trim();
+  const limit = $('limitFilter').value;
+  if (state.backend) params.set('backend', state.backend);
+  if (level) params.set('level', level);
+  if (component) params.set('component', component);
+  if (tag) params.set('tag', tag);
+  if (query) params.set('q', query);
+  params.set('limit', limit);
+  return params;
+}
+
+function updateExportLink() {
+  const params = filters();
+  params.set('limit', '2000');
+  $('exportBtn').href = '/api/export.csv?' + params.toString();
+}
+
+async function loadState() {
+  try {
+    const params = new URLSearchParams();
+    if (state.backend) params.set('backend', state.backend);
+    const response = await fetch('/api/state?' + params.toString(), { cache: 'no-store' });
+    const data = await response.json();
+    if (!data.ok) throw new Error('state not ok');
+
+    $('runDir').textContent = '运行目录：' + data.run_dir;
+    $('lastUpdate').textContent = '最后更新：' + new Date().toLocaleTimeString();
+    $('rpcBreakdown').textContent = state.backend
+      ? (state.backend === 'dds' ? 'DDS 视图' : 'SOME/IP 视图')
+      : '同步 + 异步';
+    renderSummary(data.summary || {});
+    renderProcesses(data.processes || []);
+    renderComponents(data.processes || []);
+    sampleThroughput(data.summary || {});
+  } catch (error) {
+    $('lastUpdate').textContent = '读取失败：' + error.message;
+  }
+}
+
+function renderSummary(summary) {
+  $('rpcTotal').textContent = number(summary.rpc_submitted);
+  $('rpcRate').textContent = ((summary.rpc_ok_rate || 0) * 100).toFixed(1) + '%';
+  $('rpcOk').textContent = '成功 ' + number(summary.rpc_ok);
+  $('rpcTimeout').textContent = number(summary.rpc_timeout);
+  $('rpcUnavailable').textContent = number(summary.rpc_unavailable);
+  $('rpcFailed').textContent = '失败 ' + number(summary.rpc_failed);
+  $('avgLatency').textContent = micros(summary.rpc_avg_latency_us);
+  $('maxLatency').textContent = '最大 ' + micros(summary.rpc_latency_max_us);
+  $('pendingCalls').textContent = number(summary.pending_calls);
+  $('eventsSent').textContent = number(summary.events_sent);
+  $('eventsSentBytes').textContent = number(summary.events_sent_bytes) + ' 字节';
+  $('eventsReceived').textContent = number(summary.events_received);
+  $('eventsDelivered').textContent = '交付 ' + number(summary.events_delivered);
+  $('eventsMissing').textContent = number(summary.event_seq_missing);
+  $('eventsGaps').textContent = '序号跳变 ' + number(summary.event_seq_gaps) + ' 次';
+  $('eventsCorrupt').textContent = number(summary.events_corrupt);
+  $('eventsDuplicate').textContent = '重复 ' + number(summary.events_duplicate);
+  $('reconnects').textContent = number(summary.reconnects);
+  $('disconnects').textContent = '断开 ' + number(summary.disconnects);
+  $('resumeReplayed').textContent = number(summary.resume_replayed);
+  $('resumeGaps').textContent = '缺口 ' + number(summary.resume_gaps) +
+    ' · 失败 ' + number(summary.resume_failures);
+}
+
+function renderProcesses(processes) {
+  const body = $('processRows');
+  $('processCount').textContent = processes.length + ' 个进程';
+  if (!processes.length) {
+    const hint = state.backend ? '当前后端还没有进程数据，可在上方启动演示。' : '等待进程数据...';
+    body.innerHTML = `<tr><td colspan="8" class="empty">${hint}</td></tr>`;
+    return;
+  }
+  body.innerHTML = processes.map(process => {
+    const counters = process.counters || {};
+    const age = Number(process.snapshot_age_seconds || 0);
+    const live = age < 5;
+    const isServer = process.role === 'server' || String(process.role).endsWith('-server');
+    let status;
+    if (process.stopped) {
+      status = isServer
+        ? '<span class="pill done">已停止</span>'
+        : '<span class="pill done">已结束</span>';
+    } else if (isServer) {
+      status = live ? '<span class="pill live">发布中</span>' : '<span class="pill done">已停止</span>';
+    } else if (live && counters.service_available === 1) {
+      status = '<span class="pill live">运行中</span>';
+    } else if (live) {
+      status = '<span class="pill bad">不可用</span>';
+    } else {
+      status = '<span class="pill done">已结束</span>';
+    }
+    return `<tr>
+      <td>${escapeHtml(process.role)}<div class="sub">${escapeHtml(process.backend)} · ${(Number(process.uptime_ms || 0) / 1000).toFixed(1)} s</div></td>
+      <td class="num hide-sm">${escapeHtml(process.service_id)}.${escapeHtml(process.instance_id)}</td>
+      <td class="num">${number(counters.rpc_submitted)}</td>
+      <td class="num hide-sm">${number(counters.rpc_ok)}</td>
+      <td class="num">${number(counters.rpc_timeout)}</td>
+      <td class="num">${number(counters.events_sent)} / ${number(counters.events_received)}</td>
+      <td class="num hide-sm">${number(counters.reconnects)} / ${number(counters.disconnects)}</td>
+      <td>${status}<div class="sub">快照 ${age.toFixed(1)} s 前</div></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderComponents(processes) {
+  const select = $('componentFilter');
+  const current = select.value;
+  const next = new Set(processes.map(process => process.role));
+  let changed = next.size !== state.components.size;
+  if (!changed) {
+    for (const role of next) if (!state.components.has(role)) changed = true;
+  }
+  if (!changed) return;
+  state.components = next;
+  select.innerHTML = '<option value="">全部进程</option>' +
+    [...next].sort().map(role => `<option value="${escapeHtml(role)}">${escapeHtml(role)}</option>`).join('');
+  select.value = next.has(current) ? current : '';
+}
+
+function sampleThroughput(summary) {
+  const now = Date.now();
+  const totals = {
+    rpc: Number(summary.rpc_submitted || 0),
+    event: Number(summary.events_sent || 0) + Number(summary.events_received || 0)
+  };
+  if (state.lastTotals && state.lastSampleAt) {
+    const seconds = Math.max(0.2, (now - state.lastSampleAt) / 1000);
+    const rpcDelta = Math.max(0, totals.rpc - state.lastTotals.rpc);
+    const eventDelta = Math.max(0, totals.event - state.lastTotals.event);
+    state.history.push({ rpc: rpcDelta / seconds, event: eventDelta / seconds });
+    if (state.history.length > 60) state.history.shift();
+  }
+  state.lastTotals = totals;
+  state.lastSampleAt = now;
+  drawChart();
+}
+
+function drawChart() {
+  const canvas = $('chart');
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 10 || rect.height < 10) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const width = rect.width;
+  const height = rect.height;
+  ctx.clearRect(0, 0, width, height);
+
+  const pad = { left: 44, right: 12, top: 12, bottom: 24 };
+  const plotW = Math.max(1, width - pad.left - pad.right);
+  const plotH = Math.max(1, height - pad.top - pad.bottom);
+  const points = state.history;
+  const maxValue = Math.max(1, ...points.map(point => Math.max(point.rpc, point.event)));
+  const scaledMax = Math.ceil(maxValue / 5) * 5;
+
+  ctx.strokeStyle = '#e3e8ee';
+  ctx.lineWidth = 1;
+  ctx.font = '11px Consolas, monospace';
+  ctx.fillStyle = '#6b7785';
+  for (let i = 0; i <= 4; ++i) {
+    const y = pad.top + plotH * i / 4;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(width - pad.right, y);
+    ctx.stroke();
+    const label = Math.round(scaledMax * (4 - i) / 4);
+    ctx.fillText(String(label), 6, y + 4);
+  }
+
+  if (points.length < 2) {
+    ctx.fillStyle = '#6b7785';
+    ctx.fillText('等待采样...', pad.left + 8, pad.top + 20);
+    return;
+  }
+
+  const drawSeries = (key, color) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      const x = pad.left + plotW * index / (points.length - 1);
+      const y = pad.top + plotH * (1 - point[key] / scaledMax);
+      if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  };
+  drawSeries('rpc', '#1f6feb');
+  drawSeries('event', '#1a7f37');
+
+  ctx.fillStyle = '#6b7785';
+  ctx.fillText('最近 ' + points.length + ' 秒', pad.left, height - 6);
+}
+
+async function loadLogs() {
+  const params = filters();
+  updateExportLink();
+  try {
+    const response = await fetch('/api/logs?' + params.toString(), { cache: 'no-store' });
+    const data = await response.json();
+    if (!data.ok) throw new Error('logs not ok');
+    $('logCount').textContent = '匹配 ' + number(data.total) + ' 条，显示 ' + data.entries.length + ' 条';
+    const body = $('logRows');
+    if (!data.entries.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">没有匹配的日志</td></tr>';
+      return;
+    }
+    body.innerHTML = data.entries.map(entry => `<tr>
+      <td class="log-time">${escapeHtml(entry.ts)}</td>
+      <td><span class="lv ${escapeHtml(entry.level)}">${escapeHtml(entry.level)}</span></td>
+      <td class="hide-sm">${escapeHtml(entry.backend || '—')}</td>
+      <td class="hide-sm">${escapeHtml(entry.component)}</td>
+      <td class="hide-sm">${escapeHtml(entry.tag)}</td>
+      <td class="log-msg">${escapeHtml(entry.msg)}</td>
+    </tr>`).join('');
+  } catch (error) {
+    $('logCount').textContent = '日志读取失败：' + error.message;
+  }
+}
+
+const STATUS_TEXT = {
+  running: '运行中',
+  succeeded: '已完成',
+  failed: '失败',
+  stopped: '已停止'
+};
+
+async function loadActions() {
+  try {
+    const response = await fetch('/api/actions', { cache: 'no-store' });
+    const data = await response.json();
+    if (data.ok) renderActions(data);
+  } catch (error) {
+    $('actionStatus').textContent = '任务状态读取失败：' + error.message;
+  }
+}
+
+function renderActions(data) {
+  state.actions = data;
+  const demos = data.demos || {};
+  const testsRunning = !!data.tests_running;
+  const ddsRunning = !!demos.dds;
+  const someipRunning = !!demos.vsomeip;
+  const anyDemo = ddsRunning || someipRunning;
+
+  $('startDdsBtn').disabled = ddsRunning || testsRunning;
+  $('stopDdsBtn').disabled = !ddsRunning;
+  $('startSomeipBtn').disabled = someipRunning || testsRunning;
+  $('stopSomeipBtn').disabled = !someipRunning;
+  $('runTestBtn').disabled = testsRunning || anyDemo;
+  $('stopTestBtn').disabled = !testsRunning;
+
+  $('ddsState').textContent = ddsRunning ? '运行中' : '未启动';
+  $('someipState').textContent = someipRunning ? '运行中' : '未启动';
+
+  const defaults = data.defaults || {};
+  if (!state.demoDurationInitialized && defaults.duration) {
+    $('demoDuration').value = String(defaults.duration);
+    state.demoDurationInitialized = true;
+  }
+  $('actionHint').textContent =
+    `演示默认运行 ${defaults.duration || 0} 秒；DDS 每批 ${defaults.clients || 0} 个客户端 × ` +
+    `${defaults.requests || 0} 次调用。演示与测试互斥，先停止演示再运行测试。`;
+
+  const jobs = data.jobs || [];
+  const runningTest = jobs.find(job => job.kind === 'tests' && job.status === 'running');
+  $('testState').textContent = runningTest ? `运行中：${runningTest.label}` : '未运行';
+  const active = jobs.find(job => job.status === 'running') || jobs[0] || null;
+  $('actionStatus').textContent = active
+    ? `最近任务：${active.label} · ${STATUS_TEXT[active.status] || active.status}`
+    : '暂无任务';
+  $('jobList').innerHTML = jobs.slice(0, 6).map(job => {
+    const code = job.exit_code == null ? '' : `<span>退出码 ${escapeHtml(job.exit_code)}</span>`;
+    return `<div class="job"><span>${escapeHtml(job.label)}</span>` +
+      `<span class="status-${escapeHtml(job.status)}">${STATUS_TEXT[job.status] || job.status}</span>` +
+      `<span>${escapeHtml(timeText(job.started_at))}</span>${code}</div>`;
+  }).join('');
+
+  const log = $('actionLog');
+  if (!active) {
+    log.classList.add('empty');
+    log.textContent = '暂无动作记录';
+    state.actionLogJobId = null;
+    return;
+  }
+  const changedJob = state.actionLogJobId !== active.id;
+  state.actionLogJobId = active.id;
+  const wasAtBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  log.classList.remove('empty');
+  log.textContent = `== ${active.label} · ${STATUS_TEXT[active.status] || active.status} ==\n` +
+    (active.log || '（等待输出）');
+  if (changedJob || wasAtBottom) log.scrollTop = log.scrollHeight;
+}
+
+async function postAction(payload) {
+  try {
+    $('actionStatus').textContent = '正在提交操作...';
+    const response = await fetch('/api/actions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-ARA-Monitor': '1'
+      },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(() => ({ ok: false, error: '响应不是 JSON' }));
+    if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+    renderActions(data);
+    await loadState();
+    await loadLogs();
+  } catch (error) {
+    $('actionStatus').textContent = '操作失败：' + error.message;
+  }
+}
+
+function demoArgs() {
+  const defaults = (state.actions && state.actions.defaults) || {};
+  const duration = Number($('demoDuration').value);
+  return {
+    duration: Number.isFinite(duration) && duration > 0 ? duration : Number(defaults.duration || 120),
+    requests: Number(defaults.requests || 300),
+    clients: Number(defaults.clients || 4)
+  };
+}
+
+async function startDemo(backend) {
+  await switchBackend(backend);
+  await postAction(Object.assign({ action: 'start_demo', backend }, demoArgs()));
+}
+
+async function runTests(suite) {
+  if (!suite) return;
+  if (suite === 'capacity' &&
+      !confirm('容量/极限测试约 21 分钟，会启动真实 SOME/IP 进程；期间不能启动演示。继续？')) {
+    return;
+  }
+  if (suite === 'all' &&
+      !confirm('全部测试包含单元、共享内存、SOME/IP 和 sanitizer 阶段，不含容量测试，可能运行较长时间，继续？')) {
+    return;
+  }
+  await postAction({ action: 'start_tests', suite });
+}
+
+async function switchBackend(backend) {
+  if (state.backend === backend) return;
+  state.backend = backend;
+  for (const tab of document.querySelectorAll('.tab')) {
+    tab.classList.toggle('active', tab.dataset.backend === backend);
+  }
+  state.history = [];
+  state.lastTotals = null;
+  state.lastSampleAt = 0;
+  renderSummary({});
+  renderProcesses([]);
+  drawChart();
+  await loadState();
+  await loadLogs();
+}
+
+async function refreshAll() {
+  await loadState();
+  await loadActions();
+  if (!$('autoRefresh').checked || state.paused) return;
+  await loadLogs();
+}
+
+function schedule() {
+  if (state.timer) clearInterval(state.timer);
+  state.timer = setInterval(() => {
+    if (!$('autoRefresh').checked || state.paused) return;
+    refreshAll();
+  }, 1000);
+}
+
+for (const tab of document.querySelectorAll('.tab')) {
+  tab.addEventListener('click', () => switchBackend(tab.dataset.backend));
+}
+$('startDdsBtn').addEventListener('click', () => startDemo('dds'));
+$('stopDdsBtn').addEventListener('click', () => {
+  postAction({ action: 'stop_demo', backend: 'dds' });
+});
+$('startSomeipBtn').addEventListener('click', () => startDemo('vsomeip'));
+$('stopSomeipBtn').addEventListener('click', () => {
+  postAction({ action: 'stop_demo', backend: 'vsomeip' });
+});
+$('runTestBtn').addEventListener('click', () => runTests($('testSuite').value));
+$('stopTestBtn').addEventListener('click', () => {
+  const jobId = state.actions && state.actions.test_job;
+  if (jobId) postAction({ action: 'stop_job', job_id: jobId });
+});
+
+for (const id of ['levelFilter', 'componentFilter', 'tagFilter', 'queryFilter', 'limitFilter']) {
+  $(id).addEventListener('change', () => { loadLogs(); });
+  if (id === 'tagFilter' || id === 'queryFilter') {
+    $(id).addEventListener('keydown', event => { if (event.key === 'Enter') loadLogs(); });
+  }
+}
+$('logRefreshBtn').addEventListener('click', loadLogs);
+$('refreshBtn').addEventListener('click', refreshAll);
+$('autoRefresh').addEventListener('change', () => {
+  if ($('autoRefresh').checked) refreshAll();
+});
+window.addEventListener('resize', drawChart);
+window.addEventListener('beforeunload', () => { state.paused = true; });
+
+refreshAll();
+schedule();
+</script>
+</body>
+</html>
