@@ -1,0 +1,13 @@
+# TSan 误报抑制表。
+#
+# 背景：libstdc++ 的 std::condition_variable::wait_for 走 pthread_cond_clockwait，
+# 而 GCC 11 自带的 libtsan 没有拦截这个调用，于是它看不到“等待期间释放了 mutex”，
+# 会在另一个线程随后去锁同一把 mutex 时报假的 “double lock of a mutex”。
+#
+# 触发处：HeartbeatProvider::stop() / HeartbeatMonitor::stop() —— 这两处是修掉
+# “丢唤醒导致 stop 睡满整个心跳间隔” 时加的正确加锁（锁内改状态再 notify）。
+# 用一个 25 行的 mutex+condition_variable 最小例即可复现该误报，与被测代码无关。
+#
+# 只抑制这两处 stop 的 mutex 类报告；数据竞争（data race）检测不受影响。
+mutex:ara::com::safety::HeartbeatProvider::stop
+mutex:ara::com::safety::HeartbeatMonitor::stop

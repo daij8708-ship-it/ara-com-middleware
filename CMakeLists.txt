@@ -12,6 +12,11 @@ option(ARA_COM_USE_VSOMEIP  "Enable vsomeip backend (requires libvsomeip3)" OFF)
 option(ARA_COM_BUILD_TESTS "Build GTest unit tests" ON)
 option(ARA_COM_BUILD_DEMOS "Build demo applications" ON)
 option(ARA_COM_BUILD_BENCHMARKS "Build lightweight latency benchmark" ON)
+if(UNIX)
+    option(ARA_COM_BUILD_SHM "Build POSIX shared-memory IPC channel" ON)
+else()
+    option(ARA_COM_BUILD_SHM "Build POSIX shared-memory IPC channel" OFF)
+endif()
 option(ARA_COM_ENABLE_ASAN "启用 AddressSanitizer" OFF)
 option(ARA_COM_ENABLE_UBSAN "启用 UndefinedBehaviorSanitizer" OFF)
 option(ARA_COM_ENABLE_TSAN "启用 ThreadSanitizer" OFF)
@@ -57,6 +62,17 @@ endif()
 # ---- 线程库（心跳、重连和日志组件需要）----
 find_package(Threads REQUIRED)
 
+# ---- 同机共享内存通道 ----
+if(ARA_COM_BUILD_SHM)
+    if(NOT UNIX)
+        message(FATAL_ERROR "ARA_COM_BUILD_SHM 仅支持 POSIX 平台")
+    endif()
+    add_compile_definitions(ARA_COM_USE_POSIX_SHM)
+    message(STATUS "POSIX shared-memory channel ENABLED")
+else()
+    message(STATUS "POSIX shared-memory channel DISABLED")
+endif()
+
 # ---- 子目录 ----
 add_subdirectory(src)
 
@@ -66,6 +82,10 @@ endif()
 
 if(ARA_COM_BUILD_DEMOS)
     add_subdirectory(demo)
+endif()
+
+if(ARA_COM_BUILD_SHM)
+    add_subdirectory(tools)
 endif()
 
 if(ARA_COM_BUILD_TESTS)

@@ -42,3 +42,31 @@ add_custom_command(TARGET ara_com_tests POST_BUILD
         ${CMAKE_SOURCE_DIR}/config/services.json
         $<TARGET_FILE_DIR:ara_com_tests>/services.json
 )
+
+# ---- 共享内存通道测试（仅 POSIX 构建）----
+if(ARA_COM_BUILD_SHM)
+    add_executable(ara_com_shm_tests
+        test_main.cpp
+        test_shm_channel.cpp
+    )
+
+    target_link_libraries(ara_com_shm_tests
+        PRIVATE
+            ara_com
+            GTest::GTest
+            GTest::Main
+            Threads::Threads
+    )
+
+    target_include_directories(ara_com_shm_tests
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(ara_com_shm_tests
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "ara-com"
+            TIMEOUT 120
+    )
+endif()

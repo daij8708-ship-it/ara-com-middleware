@@ -22,6 +22,35 @@ ctest --test-dir build-unit --output-on-failure
 python3 tests/test_release_guards.py
 ```
 
+## 同机共享内存通道（不依赖 vsomeip）
+
+共享内存通道使用 POSIX `shm_open` / `mmap` 和命名信号量，不需要 vsomeip、router 或应用名。
+Linux 下 `ARA_COM_BUILD_SHM` 默认开启；Windows 下默认关闭，`shared_memory.cpp` 会编成
+返回失败的桩。
+
+```bash
+cmake -S . -B build-shm -DCMAKE_BUILD_TYPE=Release \
+  -DARA_COM_BUILD_SHM=ON -DARA_COM_USE_VSOMEIP=OFF -DARA_COM_BUILD_TESTS=ON
+cmake --build build-shm -j4
+ctest --test-dir build-shm --output-on-failure
+```
+
+单元测试在同一进程里打开服务端/客户端两个句柄，覆盖边界长度、回绕、满队列、超时、
+回调线程、客户端先启动、陈旧对象清理、析构清理、配置校验和非法名字。
+
+双进程验证：
+
+```bash
+bash scripts/verify_shm.sh build-shm
+# 或者
+bash run-tests.sh shm
+```
+
+四个用例：10 万条 64 B 消息、2000 条 64 KiB 消息、客户端先启动、服务端 `kill -9`
+后客户端退出且重启能清理陈旧对象。客户端输出 `RESULT` 行，脚本核对 `ok == total`；
+证据保存在 `artifacts/shm-validation-时间戳/`。跨进程竞争无法用单进程 TSan 跟踪，
+正确性由逐条数据校验、回绕/满队列边界和崩溃重启用例保证。
+
 ## Sanitizer
 
 ASan/UBSan 用于检查内存越界、释放后访问和未定义行为；TSan 用于检查线程竞争。两者使用独立构建目录，不能组合启用。
