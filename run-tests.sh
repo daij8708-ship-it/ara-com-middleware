@@ -10,8 +10,11 @@
 #    bash run-tests.sh quick            # 只跑不依赖 vsomeip 的快速回归（约 1 分钟）
 #    bash run-tests.sh all              # unit + guards + shm + asan + tsan + vsomeip
 #    bash run-tests.sh shm              # 共享内存：单测 + 双进程压测 + RPC 多客户端
+#    bash run-tests.sh dds              # Fast DDS 回归与多进程验证（需 Fast DDS 2.x）
 #    bash run-tests.sh vsomeip          # 只跑真实 SOME/IP 端到端（需要 vsomeip3）
-#    bash run-tests.sh capacity         # 容量测试（约 21 分钟）
+#    bash run-tests.sh recovery         # 稳定性：服务端停止后客户端恢复
+#    bash run-tests.sh concurrency      # 并发压测：窗口 4 / 16 的多在途调用
+#    bash run-tests.sh capacity         # 容量/极限测试（约 21 分钟）
 #    bash run-tests.sh unit --clean -j 8
 #
 #  想把双进程的两侧分开看（服务端 / 客户端各一个终端窗口）：
@@ -162,11 +165,14 @@ list_modes() {
   unit      NullBackend 单元测试（GTest + ctest）
   guards    测试判定与失败归档的回归检查（python3 + g++）
   shm       共享内存单测 + 裸通道压测 + RPC 多客户端验证
+  dds       Fast DDS 全量回归 + RTPS/UDP 多进程验证（需 DDS 依赖）
   vsomeip   真实 SOME/IP：双进程链路、异步完成、多在途并发、停止恢复
+  recovery  稳定性：服务端停止后客户端恢复
+  concurrency 并发压测：窗口 4 / 16 的多在途调用
   quick     unit + guards（不依赖 vsomeip）
   asan      AddressSanitizer + UndefinedBehaviorSanitizer
   tsan      ThreadSanitizer
-  capacity  vsomeip 容量测试（约 21 分钟）
+  capacity  vsomeip 容量/极限测试（约 21 分钟）
   all       unit + guards + shm + asan + tsan + vsomeip
 MODES_EOF
 }
@@ -181,7 +187,7 @@ add_mode() {
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
-            unit|guards|shm|asan|tsan|vsomeip|capacity) add_mode "$1" ;;
+            unit|guards|shm|dds|asan|tsan|vsomeip|recovery|concurrency|capacity) add_mode "$1" ;;
             quick)
                 add_mode unit
                 add_mode guards
@@ -295,8 +301,12 @@ configure_stage() {
         info "清理构建目录 $dir"
         rm -rf "$SCRIPT_DIR/$dir"
     fi
+    local generator="$GENERATOR"
+    if [ -f "$SCRIPT_DIR/$dir/CMakeCache.txt" ]; then
+        generator=""
+    fi
     stage "配置 $display" "$LOG_DIR/configure-$slug.log" \
-        cmake -S "$SCRIPT_DIR" -B "$SCRIPT_DIR/$dir" $GENERATOR "$@"
+        cmake -S "$SCRIPT_DIR" -B "$SCRIPT_DIR/$dir" $generator "$@"
 }
 
 build_stage() {
@@ -521,9 +531,14 @@ mode_tsan() {
     # libtsan 11 不拦截 pthread_cond_clockwait（libstdc++ 的 wait_for 用它），会漏看
     # 等待期间释放的 mutex，把心跳 stop() 的正常加锁误报成 double lock；用 tsan.supp
     # 只抑制这两处，数据竞争检测不受影响。
+    # TSAN_OPTIONS 会按空格拆参数，项目路径含空格时直接传绝对路径会解析失败，
+    # 因此先复制到无空格的临时路径。
+    local tsan_supp="${TMPDIR:-/tmp}/ara-com-tsan-$$.supp"
+    cp "$SCRIPT_DIR/tests/tsan.supp" "$tsan_supp"
     stage "运行 $display" "$LOG_DIR/ctest-tsan.log" \
-        $prefix env TSAN_OPTIONS="suppressions=$SCRIPT_DIR/tests/tsan.supp" \
+        $prefix env TSAN_OPTIONS="suppressions=$tsan_supp" \
         ctest --test-dir "$SCRIPT_DIR/build-tsan" --output-on-failure --timeout 90 || rc=$?
+    rm -f "$tsan_supp"
     if [ "$build_rc" -ne 0 ] || [ "$rc" -ne 0 ]; then
         if grep -q "unexpected memory mapping" "$LOG_DIR/ctest-tsan.log" "$LOG_DIR/build-tsan.log" 2>/dev/null; then
             echo "$C_YELLOW  提示：TSan 与内核 ASLR 熵冲突（与项目代码无关），$C_RESET"
@@ -563,6 +578,19 @@ mode_shm() {
 
     stage "共享内存 RPC 多客户端验证" "$LOG_DIR/shm-backend.log" \
         bash "$SCRIPT_DIR/scripts/verify_shm_backend.sh" "$SCRIPT_DIR/build-shm"
+}
+
+mode_dds() {
+    configure_stage "Fast DDS 配置" dds build-dds \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DARA_COM_USE_DDS=ON \
+        -DARA_COM_USE_VSOMEIP=OFF \
+        -DARA_COM_BUILD_TESTS=ON \
+        -DARA_COM_BUILD_DEMOS=OFF \
+        -DARA_COM_BUILD_BENCHMARKS=OFF
+    build_stage "Fast DDS 构建" dds build-dds
+    stage "Fast DDS 全量回归与多进程验证" "$LOG_DIR/ctest-dds.log" \
+        ctest --test-dir "$SCRIPT_DIR/build-dds" --output-on-failure --timeout 120
 }
 
 mode_vsomeip() {
@@ -612,12 +640,52 @@ mode_vsomeip() {
         "$SCRIPT_DIR/scripts/check_rpc_concurrency_trace.py" 180 1000 16
     sleep 1
 
-    configure_stage "停止恢复构建" vsomeip-disconnect build-rpc-disconnect \
+    mode_recovery
+}
+
+mode_concurrency() {
+    local display="vsomeip 并发压测"
+    if ! has_vsomeip; then
+        skip_stage "$display" "未找到 vsomeip3（pkg-config 或 CMake 包）"
+        return 0
+    fi
+    if ! has_gtest; then
+        skip_stage "$display" "未找到 GTest，无法构建 rpc_completion_test / rpc_concurrency_test"
+        return 0
+    fi
+
+    configure_stage "并发压测构建" concurrency build-rpc-trace \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DARA_COM_USE_VSOMEIP=ON \
+        -DARA_COM_BUILD_TESTS=ON \
+        -DARA_COM_RPC_COMPLETION_TRACE=ON
+    build_stage "并发压测构建" concurrency build-rpc-trace
+    run_rpc_pair "多在途并发（窗口 4，100 次）" rpc-concurrency-w4 \
+        "$SCRIPT_DIR/build-rpc-trace/rpc_concurrency_test" \
+        "$SCRIPT_DIR/scripts/check_rpc_concurrency_trace.py" 180 100 4
+    sleep 1
+    run_rpc_pair "多在途并发（窗口 16，1000 次）" rpc-concurrency-w16 \
+        "$SCRIPT_DIR/build-rpc-trace/rpc_concurrency_test" \
+        "$SCRIPT_DIR/scripts/check_rpc_concurrency_trace.py" 180 1000 16
+}
+
+mode_recovery() {
+    local display="服务停止与恢复"
+    if ! has_vsomeip; then
+        skip_stage "$display" "未找到 vsomeip3（pkg-config 或 CMake 包）"
+        return 0
+    fi
+    if ! has_gtest; then
+        skip_stage "$display" "未找到 GTest，无法构建恢复用例"
+        return 0
+    fi
+
+    configure_stage "停止恢复构建" recovery build-rpc-disconnect \
         -DCMAKE_BUILD_TYPE=Release \
         -DARA_COM_USE_VSOMEIP=ON \
         -DARA_COM_BUILD_TESTS=ON \
         -DARA_COM_RPC_COMPLETION_TRACE=OFF
-    build_stage "停止恢复构建" vsomeip-disconnect build-rpc-disconnect
+    build_stage "停止恢复构建" recovery build-rpc-disconnect
     stage "服务停止与恢复 (scripts/run_rpc_disconnect_recovery.sh)" "$LOG_DIR/rpc-disconnect.log" \
         bash "$SCRIPT_DIR/scripts/run_rpc_disconnect_recovery.sh"
 }
@@ -769,9 +837,12 @@ main() {
             unit) mode_unit ;;
             guards) mode_guards ;;
             shm) mode_shm ;;
+            dds) mode_dds ;;
             asan) mode_asan ;;
             tsan) mode_tsan ;;
             vsomeip) mode_vsomeip ;;
+            recovery) mode_recovery ;;
+            concurrency) mode_concurrency ;;
             capacity) mode_capacity ;;
         esac
     done

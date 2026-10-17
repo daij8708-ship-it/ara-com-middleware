@@ -62,12 +62,21 @@ bool ServiceProxy::init() {
     m_backend->register_availability_callback(
         [this](ServiceId sid, InstanceId iid, ServiceAvailability avail) {
             if (sid == m_config.service_id && iid == m_config.instance_id) {
-                m_availability.store(avail);
+                const auto previous = m_availability.exchange(avail);
+                auto& metrics = monitor::Monitor::instance();
+                metrics.set(monitor::Counter::ServiceAvailable,
+                            avail == ServiceAvailability::AVAILABLE ? 1 : 0);
                 if (avail == ServiceAvailability::AVAILABLE) {
+                    if (previous == ServiceAvailability::UNAVAILABLE) {
+                        metrics.inc(monitor::Counter::Reconnects);
+                    }
                     ARA_LOG_INFO("PROXY", "Service available: " +
                                  std::to_string(sid) + "." + std::to_string(iid));
                     m_reconnect_mgr->on_connection_ok();
                 } else {
+                    if (previous == ServiceAvailability::AVAILABLE) {
+                        metrics.inc(monitor::Counter::Disconnects);
+                    }
                     ARA_LOG_WARN("PROXY", "Service unavailable: " +
                                  std::to_string(sid) + "." + std::to_string(iid));
                     if (m_reconnect_enabled) m_reconnect_mgr->on_connection_lost();
@@ -106,7 +115,13 @@ bool ServiceProxy::start() {
     if (m_heartbeat_enabled) m_heartbeat_monitor->start(m_heartbeat_timeout_ms, [this]() {
         ARA_LOG_WARN("PROXY", "Heartbeat lost for service " +
                      std::to_string(m_config.service_id));
-        m_availability.store(ServiceAvailability::UNAVAILABLE);
+        auto& metrics = monitor::Monitor::instance();
+        metrics.inc(monitor::Counter::HeartbeatTimeouts);
+        metrics.set(monitor::Counter::ServiceAvailable, 0);
+        const auto previous = m_availability.exchange(ServiceAvailability::UNAVAILABLE);
+        if (previous == ServiceAvailability::AVAILABLE) {
+            metrics.inc(monitor::Counter::Disconnects);
+        }
         if (m_reconnect_enabled) m_reconnect_mgr->on_connection_lost();
     });
 
@@ -196,6 +211,10 @@ void ServiceProxy::on_raw_event_received(EventId event_id,
 
 void ServiceProxy::dispatch_complete_event(EventId event_id,
                                             const std::vector<std::uint8_t>& data) {
+    auto& metrics = monitor::Monitor::instance();
+    metrics.inc(monitor::Counter::EventsReceived);
+    metrics.inc(monitor::Counter::EventsReceivedBytes, data.size());
+
     EventCallback callback;
     std::vector<std::uint8_t> payload = data;
     bool deliver = true;
@@ -205,6 +224,7 @@ void ServiceProxy::dispatch_complete_event(EventId event_id,
             auto checker = m_e2e_checkers.find(event_id);
             if (checker == m_e2e_checkers.end() ||
                 checker->second->check(data, payload) != ComRet::OK) {
+                metrics.inc(monitor::Counter::EventsCorrupt);
                 ARA_LOG_WARN("PROXY", "E2E check failed for event " +
                              std::to_string(event_id));
                 return;
@@ -213,6 +233,7 @@ void ServiceProxy::dispatch_complete_event(EventId event_id,
 
         if (m_resume_enabled) {
             if (payload.size() < safety::RESUME_SEQ_HEADER_SIZE) {
+                metrics.inc(monitor::Counter::EventsCorrupt);
                 ARA_LOG_WARN("PROXY", "Sequenced event too short for event " +
                              std::to_string(event_id));
                 return;
@@ -224,7 +245,18 @@ void ServiceProxy::dispatch_complete_event(EventId event_id,
             if (last != m_last_seq.end() && seq <= last->second) {
                 // 回放与实时流可能重叠：序号不大于已见过的，说明是重复，丢弃。
                 deliver = false;
+                metrics.inc(monitor::Counter::EventsDuplicate);
             } else {
+                if (last != m_last_seq.end() && seq > last->second + 1) {
+                    const auto missing = seq - last->second - 1;
+                    metrics.inc(monitor::Counter::EventSeqGaps);
+                    metrics.inc(monitor::Counter::EventSeqMissing, missing);
+                    ARA_LOG_WARN("PROXY", "Event gap detected: event=" +
+                                 std::to_string(event_id) + " expected=" +
+                                 std::to_string(last->second + 1) + " got=" +
+                                 std::to_string(seq) + " missing=" +
+                                 std::to_string(missing));
+                }
                 m_last_seq[event_id] = seq;
             }
         }
@@ -232,7 +264,10 @@ void ServiceProxy::dispatch_complete_event(EventId event_id,
         auto it = m_event_callbacks.find(event_id);
         if (it != m_event_callbacks.end()) callback = it->second;
     }
-    if (deliver && callback) callback(payload);
+    if (deliver && callback) {
+        metrics.inc(monitor::Counter::EventsDelivered);
+        callback(payload);
+    }
 }
 
 void ServiceProxy::on_resume_gap(std::function<void(EventId, std::uint32_t)> callback) {
@@ -255,11 +290,15 @@ safety::ResumeStatus ServiceProxy::request_resume(EventId event_id, std::uint32_
     }
 
     const auto request = safety::encode_resume_request(event_id, last_seq);
+    auto& metrics = monitor::Monitor::instance();
+    metrics.inc(monitor::Counter::ResumeRequests);
+
     std::vector<std::uint8_t> response;
     const ComRet ret = m_backend->call_method_sync(
         m_config.service_id, m_config.instance_id, safety::RESUME_METHOD_ID,
         request, response, timeout_ms);
     if (ret != ComRet::OK) {
+        metrics.inc(monitor::Counter::ResumeFailures);
         ARA_LOG_WARN("PROXY", "Resume request failed for event " +
                      std::to_string(event_id));
         return safety::ResumeStatus::GAP;
@@ -269,15 +308,18 @@ safety::ResumeStatus ServiceProxy::request_resume(EventId event_id, std::uint32_
     std::uint16_t count = 0;
     std::uint32_t earliest = safety::RESUME_SEQ_UNKNOWN;
     if (!safety::decode_resume_response(response, status, count, earliest)) {
+        metrics.inc(monitor::Counter::ResumeFailures);
         ARA_LOG_WARN("PROXY", "Malformed resume response for event " +
                      std::to_string(event_id));
         return safety::ResumeStatus::GAP;
     }
 
+    metrics.inc(monitor::Counter::ResumeReplayed, count);
     ARA_LOG_INFO("PROXY", "Resume event=" + std::to_string(event_id) +
                  " replayed=" + std::to_string(count) +
                  " status=" + std::to_string(static_cast<int>(status)));
     if (status == safety::ResumeStatus::GAP) {
+        metrics.inc(monitor::Counter::ResumeGaps);
         std::function<void(EventId, std::uint32_t)> cb;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -316,21 +358,32 @@ void ServiceProxy::resume_subscriptions_async() {
         }
     }
 
+    auto& metrics = monitor::Monitor::instance();
     for (const auto& target : targets) {
         const auto request = safety::encode_resume_request(target.first, target.second);
+        metrics.inc(monitor::Counter::ResumeRequests);
         m_backend->call_method_async(
             m_config.service_id, m_config.instance_id, safety::RESUME_METHOD_ID,
             request,
             [this, event_id = target.first](ComRet status,
                                             const std::vector<std::uint8_t>& response) {
-                if (status != ComRet::OK) return;
+                auto& callback_metrics = monitor::Monitor::instance();
+                if (status != ComRet::OK) {
+                    callback_metrics.inc(monitor::Counter::ResumeFailures);
+                    return;
+                }
                 safety::ResumeStatus resumed = safety::ResumeStatus::GAP;
                 std::uint16_t count = 0;
                 std::uint32_t earliest = safety::RESUME_SEQ_UNKNOWN;
-                if (!safety::decode_resume_response(response, resumed, count, earliest)) return;
+                if (!safety::decode_resume_response(response, resumed, count, earliest)) {
+                    callback_metrics.inc(monitor::Counter::ResumeFailures);
+                    return;
+                }
+                callback_metrics.inc(monitor::Counter::ResumeReplayed, count);
                 ARA_LOG_INFO("PROXY", "Auto-resume event=" + std::to_string(event_id) +
                              " replayed=" + std::to_string(count));
                 if (resumed == safety::ResumeStatus::GAP) {
+                    callback_metrics.inc(monitor::Counter::ResumeGaps);
                     std::function<void(EventId, std::uint32_t)> cb;
                     {
                         std::lock_guard<std::mutex> lock(m_mutex);

@@ -34,6 +34,15 @@ struct LogEntry {
     std::string  timestamp;
 };
 
+/// 文件输出选项；默认保持原有纯文本格式
+struct LogOptions {
+    bool        json_lines{false};      ///< 每行一个 JSON 对象
+    std::size_t rotate_bytes{0};        ///< 单文件上限，0 表示不轮转
+    std::size_t max_files{0};           ///< 保留的历史文件数，0 表示只保留当前文件
+    std::string component{"ara-com"};   ///< 写入 JSON 的进程角色标签
+    std::string backend;                ///< 写入 JSON 的通信后端；为空时不输出该字段
+};
+
 // =========================================================================
 //  异步日志器
 // =========================================================================
@@ -50,7 +59,8 @@ public:
     static AsyncLogger& instance();
 
     /// 初始化日志器
-    bool init(LogLevel min_level, const std::string& log_file_path, std::size_t max_queue = 4096);
+    bool init(LogLevel min_level, const std::string& log_file_path,
+              std::size_t max_queue = 4096, const LogOptions& options = {});
 
     /// 平稳停止日志器
     void shutdown();
@@ -64,6 +74,9 @@ public:
     /// 获取当前日志级别
     LogLevel level() const { return m_min_level.load(); }
 
+    /// 因队列满而丢弃的日志条数
+    std::uint64_t dropped() const { return m_dropped.load(); }
+
     // ---- 便捷宏定义在类声明之后 ----
 
     ~AsyncLogger();
@@ -74,6 +87,9 @@ private:
     AsyncLogger& operator=(const AsyncLogger&) = delete;
 
     void writer_thread();  ///< 后台写入循环
+    std::string format_text(const LogEntry& entry) const;
+    std::string format_file(const LogEntry& entry) const;
+    void rotate_if_needed(std::size_t incoming_bytes);
 
     std::atomic<LogLevel>    m_min_level{LogLevel::INFO};
     std::atomic<bool>        m_running{false};
@@ -87,6 +103,10 @@ private:
     std::thread              m_writer_thread;
     std::ofstream            m_log_file;
     std::mutex               m_file_mutex;
+    LogOptions               m_options;
+    std::string              m_log_file_path;
+    std::size_t              m_file_bytes{0};
+    std::atomic<std::uint64_t> m_dropped{0};
 };
 
 // =========================================================================

@@ -2,6 +2,7 @@
 set(ARA_COM_SOURCES
     # 通用组件
     common/logger.cpp
+    common/monitor.cpp
     common/json_parser.cpp
 
     # 可靠性组件
@@ -39,6 +40,12 @@ target_link_libraries(ara_com
 # 按构建选项链接 vsomeip
 if(ARA_COM_USE_VSOMEIP)
     target_link_libraries(ara_com PUBLIC vsomeip3)
+endif()
+
+if(ARA_COM_USE_DDS)
+    target_sources(ara_com PRIVATE communication/dds_backend.cpp)
+    target_link_libraries(ara_com PUBLIC fastrtps fastcdr)
+    target_compile_definitions(ara_com PUBLIC ARA_COM_USE_DDS)
 endif()
 
 # shm_open / sem_open；glibc 2.34 之后已并入 libc，-lrt 仍然兼容。

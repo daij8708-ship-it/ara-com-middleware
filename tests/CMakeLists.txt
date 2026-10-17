@@ -43,6 +43,27 @@ add_custom_command(TARGET ara_com_tests POST_BUILD
         $<TARGET_FILE_DIR:ara_com_tests>/services.json
 )
 
+# 观测组件单独一个测试进程：日志器是单例，避免与其它用例互相影响。
+add_executable(ara_com_observability_tests test_main.cpp test_monitor.cpp)
+target_link_libraries(ara_com_observability_tests
+    PRIVATE
+        ara_com
+        GTest::GTest
+        GTest::Main
+        Threads::Threads
+)
+target_include_directories(ara_com_observability_tests
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+)
+gtest_discover_tests(ara_com_observability_tests
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS "observability"
+        TIMEOUT 60
+        RUN_SERIAL TRUE
+)
+
 # ---- 共享内存通道测试（仅 POSIX 构建）----
 if(ARA_COM_BUILD_SHM)
     add_executable(ara_com_shm_tests
@@ -70,4 +91,17 @@ if(ARA_COM_BUILD_SHM)
             LABELS "ara-com"
             TIMEOUT 120
     )
+endif()
+
+if(ARA_COM_USE_DDS)
+    add_executable(ara_com_dds_tests test_main.cpp test_dds_backend.cpp)
+    target_link_libraries(ara_com_dds_tests PRIVATE ara_com GTest::GTest GTest::Main Threads::Threads)
+    gtest_discover_tests(ara_com_dds_tests
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES LABELS "dds" TIMEOUT 90 RUN_SERIAL TRUE)
+    if(UNIX)
+        add_test(NAME DDS.MultiProcess
+            COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/verify_dds_backend.sh ${CMAKE_BINARY_DIR})
+        set_tests_properties(DDS.MultiProcess PROPERTIES LABELS "dds" TIMEOUT 120 RUN_SERIAL TRUE)
+    endif()
 endif()

@@ -5,6 +5,7 @@
 
 #include "service_skeleton.h"
 #include "common/logger.h"
+#include "common/monitor.h"
 
 namespace ara {
 namespace com {
@@ -73,6 +74,7 @@ bool ServiceSkeleton::start() {
     }
 
     m_started = true;
+    monitor::Monitor::instance().set(monitor::Counter::ServiceAvailable, 1);
 
     ARA_LOG_INFO("SKELETON", "Service started: " +
                  std::to_string(m_config.service_id) + "." +
@@ -89,6 +91,7 @@ void ServiceSkeleton::stop() {
 
     m_backend->stop_offer_service(m_config.service_id, m_config.instance_id);
     m_started = false;
+    monitor::Monitor::instance().set(monitor::Counter::ServiceAvailable, 0);
 
     ARA_LOG_INFO("SKELETON", "Service stopped: " +
                  std::to_string(m_config.service_id));
@@ -119,6 +122,8 @@ void ServiceSkeleton::register_method_internal(MethodId method_id, MethodHandler
                 window.set_capacity(m_idempotency_window_size);
                 std::vector<std::uint8_t> cached;
                 if (window.lookup(key, cached)) {
+                    monitor::Monitor::instance().inc(
+                        monitor::Counter::IdempotencyHits);
                     ARA_LOG_DEBUG("SKELETON", "Idempotency hit: method=" +
                                   std::to_string(method_id) +
                                   " key=" + std::to_string(key));
@@ -135,6 +140,21 @@ void ServiceSkeleton::register_method_internal(MethodId method_id, MethodHandler
             }
             return response;
         };
+    }
+
+    // 内部续收 Method 单独统计，不计入业务 Method 处理次数。
+    if (method_id != safety::RESUME_METHOD_ID) {
+        MethodHandler counted = [inner = std::move(handler)](
+            const std::vector<std::uint8_t>& request) -> std::vector<std::uint8_t> {
+            monitor::Monitor::instance().inc(monitor::Counter::MethodsHandled);
+            try {
+                return inner(request);
+            } catch (...) {
+                monitor::Monitor::instance().inc(monitor::Counter::MethodFailures);
+                throw;
+            }
+        };
+        handler = std::move(counted);
     }
 
     m_backend->register_method_handler(
@@ -190,19 +210,28 @@ bool ServiceSkeleton::emit_event(EventId event_id, const std::vector<std::uint8_
     for (const auto& frag : fragments) {
         if (!m_backend->send_event(m_config.service_id, m_config.instance_id,
                                     event_id, frag)) {
+            monitor::Monitor::instance().inc(
+                monitor::Counter::EventsSendFailed);
             ARA_LOG_ERROR("SKELETON", "Failed to send event fragment");
             return false;
         }
     }
 
+    auto& metrics = monitor::Monitor::instance();
+    metrics.inc(monitor::Counter::EventsSent);
+    metrics.inc(monitor::Counter::EventsSentBytes, business.size());
     return true;
 }
 
 std::vector<std::uint8_t> ServiceSkeleton::handle_resume_request(
     const std::vector<std::uint8_t>& request) {
+    auto& metrics = monitor::Monitor::instance();
+    metrics.inc(monitor::Counter::ResumeRequests);
+
     EventId event_id = 0;
     std::uint32_t last_seq = safety::RESUME_SEQ_UNKNOWN;
     if (!safety::decode_resume_request(request, event_id, last_seq)) {
+        metrics.inc(monitor::Counter::ResumeFailures);
         ARA_LOG_WARN("SKELETON", "Malformed resume request");
         return safety::encode_resume_response(safety::ResumeStatus::GAP, 0,
                                               safety::RESUME_SEQ_UNKNOWN);
@@ -231,6 +260,8 @@ std::vector<std::uint8_t> ServiceSkeleton::handle_resume_request(
 
     const auto count = static_cast<std::uint16_t>(
         replay.size() > 0xFFFFu ? 0xFFFFu : replay.size());
+    metrics.inc(monitor::Counter::ResumeReplayed, count);
+    if (gap) metrics.inc(monitor::Counter::ResumeGaps);
     ARA_LOG_INFO("SKELETON", "Resume event=" + std::to_string(event_id) +
                  " last_seq=" + std::to_string(last_seq) +
                  " replayed=" + std::to_string(count) +

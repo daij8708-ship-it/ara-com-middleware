@@ -99,8 +99,47 @@ type 取值：
 `payload_size` 必须等于总帧长减 24；单帧上限 64 KiB。客户端注册通过文件锁串行化，
 服务端最多接受 32 个客户端。这里没有动态服务发现：客户端按固定服务名找到控制通道。
 
+## DDS Topic 与 CDR 信封
+
+`DdsBackend` 使用 Fast DDS 2.x 的 DDS API 与 RTPS/UDP；请求应答约定属于本项目，
+不宣称符合 DDS-RPC。Domain ID 由 `DdsBackendOptions.domain_id` 指定，默认 0。
+
+Topic 前缀为 `ara_com_v1_s<sid>_i<iid>_v<major>_<minor>`，整数采用十进制：
+
+- `_request` / `_reply`：分别承载方法请求、应答；服务、实例、版本由 Topic 隔离；
+- `_event_<eid>_group_<gid>`：一个事件/组对应一个 Topic；只有匹配订阅的 DataReader 收到事件；
+- 版本采用精确匹配，不实现 SOME/IP 的通配版本规则。
+
+三个通路都使用类型名 `ara_com_Envelope_v1`，由手写 `TopicDataType` 使用 Fast CDR 编解码：
+
+```text
+CDR encapsulation(4B)
+client_guid: octet[16]
+request_id: uint64
+method_or_event: uint16
+status: octet
+payload: sequence<octet, 65536>
+```
+
+字段遵循 CDR 对齐和封装头字节序，信封固定开销 36 字节，RTPS DATA 子消息末尾
+允许额外 0–3 字节对齐填充。反序列化先校验长度、状态范围和剩余字节数，再分配
+payload；业务序列化/E2E/自定义分片仍在信封内部。
+这里没有生成或交换完整 XTypes TypeObject，不宣称与任意 DDS 工具自动互操作。
+
+RPC 用客户端 Participant GUID 与 64 位递增 request ID 关联；应答沿共享 reply Topic
+分发，客户端同时核对 GUID、request ID 与 method，不能把其他客户端的应答当作自己完成。
+request ID 是传输关联标识，不是幂等 key，DDS Reliable 也不保证业务操作只执行一次。
+
+请求和应答使用 Reliable + Volatile + KeepAll，资源上限 128 个样本；每客户端最多
+128 个在途调用。发送等待最多 100ms，Writer 心跳周期为 50ms，及时触发 ACK 回收
+已确认样本；资源不足返回失败，不无限缓存。后台异步提交返回 false 时不调用后端回调，
+Proxy 会将未通知的提交失败补为一次 INTERNAL_ERR，避免业务无限等待。
+事件使用 Reliable + Volatile + KeepLast(32)：迟加入的订阅者不回放历史，断线后恢复
+匹配不等于补齐漏掉的事件；项目事件续收仍是独立的可选机制。
+
 ## 已知非标准部分
 
+- DDS 的 Topic 命名、信封和请求应答关联是自定义适配，不是 DDS-RPC 或 AUTOSAR DDS binding。
 - 数据类型采用项目自定义序列化，不保证与 CommonAPI 生成代码兼容。
 - 分片协议不是 SOME/IP-TP。
 - CRC-8 未包含完整 AUTOSAR Data ID 等配置项。

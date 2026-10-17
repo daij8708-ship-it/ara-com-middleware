@@ -26,6 +26,7 @@
 #include "common/types.h"
 #include "common/exception.h"
 #include "common/logger.h"
+#include "common/monitor.h"
 #include "runtime.h"
 #include "safety/e2e.h"
 #include "safety/fragmentation.h"
@@ -35,6 +36,7 @@
 #include "safety/resume.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <future>
@@ -255,10 +257,20 @@ RspT ServiceProxy::call_method_sync(MethodId method_id, const ReqT& request,
     const std::vector<std::uint8_t> req_bytes = frame_request(
         next_request_key(), request.serialize());
 
+    auto& metrics = monitor::Monitor::instance();
+    metrics.inc(monitor::Counter::RpcSubmitted);
+    metrics.inc(monitor::Counter::PendingCalls);
+    metrics.inc(monitor::Counter::RpcRequestBytes, req_bytes.size());
+
+    const auto started = std::chrono::steady_clock::now();
     std::vector<std::uint8_t> rsp_bytes;
     ComRet ret = m_backend->call_method_sync(
         m_config.service_id, m_config.instance_id,
         method_id, req_bytes, rsp_bytes, timeout_ms);
+    const auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                std::chrono::steady_clock::now() - started).count();
+    metrics.complete_rpc(ret, static_cast<std::uint64_t>(latency_us),
+                         rsp_bytes.size());
 
     if (ret == ComRet::TIMEOUT) {
         throw TimeoutException("Method call " + std::to_string(method_id) + " timed out");
@@ -286,12 +298,23 @@ RspT ServiceProxy::call_method_sync_idempotent(MethodId method_id, const ReqT& r
     const std::uint64_t key = next_request_key();
     const std::vector<std::uint8_t> payload = request.serialize();
 
+    auto& metrics = monitor::Monitor::instance();
     ComRet last = ComRet::INTERNAL_ERR;
     for (unsigned attempt = 0; attempt < max_attempts; ++attempt) {
+        const std::vector<std::uint8_t> framed = frame_request(key, payload);
+        metrics.inc(monitor::Counter::RpcSubmitted);
+        metrics.inc(monitor::Counter::PendingCalls);
+        metrics.inc(monitor::Counter::RpcRequestBytes, framed.size());
+
+        const auto started = std::chrono::steady_clock::now();
         std::vector<std::uint8_t> rsp_bytes;
         last = m_backend->call_method_sync(
             m_config.service_id, m_config.instance_id, method_id,
-            frame_request(key, payload), rsp_bytes, timeout_ms);
+            framed, rsp_bytes, timeout_ms);
+        const auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - started).count();
+        metrics.complete_rpc(last, static_cast<std::uint64_t>(latency_us),
+                             rsp_bytes.size());
         if (last == ComRet::OK) return RspT::deserialize(rsp_bytes);
         // 只有"没有确定答复"的情况才重试；其它错误立即上抛。
         if (last != ComRet::TIMEOUT && last != ComRet::NOT_AVAILABLE) break;
@@ -312,9 +335,29 @@ void ServiceProxy::call_method_async(MethodId method_id, const ReqT& request,
     const std::vector<std::uint8_t> req_bytes = frame_request(
         next_request_key(), request.serialize());
 
-    m_backend->call_method_async(
-        m_config.service_id, m_config.instance_id,
-        method_id, req_bytes, std::move(callback), timeout_ms);
+    auto& metrics = monitor::Monitor::instance();
+    metrics.inc(monitor::Counter::RpcSubmitted);
+    metrics.inc(monitor::Counter::PendingCalls);
+    metrics.inc(monitor::Counter::RpcRequestBytes, req_bytes.size());
+
+    const auto started = std::chrono::steady_clock::now();
+    auto completed = std::make_shared<std::atomic<bool>>(false);
+    MethodReplyCallback finish = [completed, started, callback = std::move(callback)](
+            ComRet status, const std::vector<std::uint8_t>& response) {
+        if (!completed->exchange(true)) {
+            const auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                        std::chrono::steady_clock::now() - started).count();
+            monitor::Monitor::instance().complete_rpc(
+                status, static_cast<std::uint64_t>(latency_us), response.size());
+            if (callback) callback(status, response);
+        }
+    };
+    // 部分后端在返回 false 前已同步通知失败，不能再次调用用户回调。
+    if (!m_backend->call_method_async(
+            m_config.service_id, m_config.instance_id,
+            method_id, req_bytes, finish, timeout_ms)) {
+        finish(ComRet::INTERNAL_ERR, {});
+    }
 }
 
 } // namespace com

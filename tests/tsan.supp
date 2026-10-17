@@ -8,6 +8,11 @@
 # “丢唤醒导致 stop 睡满整个心跳间隔” 时加的正确加锁（锁内改状态再 notify）。
 # 用一个 25 行的 mutex+condition_variable 最小例即可复现该误报，与被测代码无关。
 #
-# 只抑制这两处 stop 的 mutex 类报告；数据竞争（data race）检测不受影响。
+# 新增触发处：Monitor 的快照写线程同样用 wait_for 等待停止信号，
+# 重复 start 检查会命中同一类误报。
+#
+# 只抑制这些 stop/start 的 mutex 类报告；数据竞争（data race）检测不受影响。
 mutex:ara::com::safety::HeartbeatProvider::stop
 mutex:ara::com::safety::HeartbeatMonitor::stop
+mutex:ara::com::monitor::Monitor::start_snapshot_writer
+mutex:ara::com::monitor::Monitor::stop_snapshot_writer

@@ -106,6 +106,7 @@ public:
 enum class BackendType {
     VSOMEIP,    ///< 使用 vsomeip，需要 libvsomeip3
     SHM,        ///< 同机共享内存，支持多客户端
+    DDS,        ///< 使用 Fast DDS，基于 RTPS/UDP
     NULL_BACKEND ///< 用于单元测试的进程内后端
 };
 

@@ -225,6 +225,14 @@ TEST_F(ServiceProxyTest, AsyncMethodCall) {
 
     EXPECT_TRUE(callback_invoked.load());
     EXPECT_EQ(callback_status, ComRet::OK);
+
+    int rejected_completions = 0;
+    m_proxy->call_method_async<PingRequest, PongResponse>(
+        0x7FFF, req, [&](ComRet status, const std::vector<std::uint8_t>&) {
+            ++rejected_completions;
+            EXPECT_EQ(status, ComRet::NOT_AVAILABLE);
+        });
+    EXPECT_EQ(rejected_completions, 1);
 }
 
 // =========================================================================

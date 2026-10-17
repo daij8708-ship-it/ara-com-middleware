@@ -26,6 +26,9 @@
 #if defined(ARA_COM_USE_POSIX_SHM)
 #include "shm_backend.h"
 #endif
+#if defined(ARA_COM_USE_DDS)
+#include "dds_backend.h"
+#endif
 
 namespace ara {
 namespace com {
@@ -769,6 +772,13 @@ std::shared_ptr<ICommunicationBackend> create_backend(BackendType type) {
             return std::make_shared<ShmBackend>();
 #else
             ARA_LOG_ERROR("RUNTIME", "SHM backend is not enabled in this build");
+            return nullptr;
+#endif
+        case BackendType::DDS:
+#if defined(ARA_COM_USE_DDS)
+            return std::make_shared<DdsBackend>();
+#else
+            ARA_LOG_ERROR("RUNTIME", "当前构建未启用 DDS 后端");
             return nullptr;
 #endif
         case BackendType::NULL_BACKEND:
