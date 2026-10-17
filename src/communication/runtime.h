@@ -105,6 +105,7 @@ public:
 /// 支持的后端类型
 enum class BackendType {
     VSOMEIP,    ///< 使用 vsomeip，需要 libvsomeip3
+    SHM,        ///< 同机共享内存，支持多客户端
     NULL_BACKEND ///< 用于单元测试的进程内后端
 };
 

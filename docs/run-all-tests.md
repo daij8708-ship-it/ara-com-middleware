@@ -35,21 +35,31 @@ cmake --build build-shm -j4
 ctest --test-dir build-shm --output-on-failure
 ```
 
-单元测试在同一进程里打开服务端/客户端两个句柄，覆盖边界长度、回绕、满队列、超时、
+该构建共 89 个测试：73 个基础单元测试、12 个通道测试、4 个 backend 测试。
+通道测试在同一进程里打开服务端/客户端两个句柄，覆盖边界长度、回绕、满队列、超时、
 回调线程、客户端先启动、陈旧对象清理、析构清理、配置校验和非法名字。
+backend 测试覆盖单客户端 RPC/Event、两个客户端的路由与广播、异步回复/超时，
+以及服务端重启后的自动重连。
 
 双进程验证：
 
 ```bash
 bash scripts/verify_shm.sh build-shm
+bash scripts/verify_shm_backend.sh build-shm
 # 或者
 bash run-tests.sh shm
 ```
 
-四个用例：10 万条 64 B 消息、2000 条 64 KiB 消息、客户端先启动、服务端 `kill -9`
-后客户端退出且重启能清理陈旧对象。客户端输出 `RESULT` 行，脚本核对 `ok == total`；
-证据保存在 `artifacts/shm-validation-时间戳/`。跨进程竞争无法用单进程 TSan 跟踪，
-正确性由逐条数据校验、回绕/满队列边界和崩溃重启用例保证。
+`verify_shm.sh` 的四个用例：10 万条 64 B 消息、2000 条 64 KiB 消息、客户端先启动、
+服务端 `kill -9` 后客户端退出且重启能清理陈旧对象。客户端输出 `RESULT` 行，
+脚本核对 `ok == total`；证据保存在 `artifacts/shm-validation-时间戳/`。
+
+`verify_shm_backend.sh` 启动一个服务端和两个客户端，每个客户端执行 200 次 RPC
+并订阅 Event；脚本核对两个客户端都满足 `fail=0`、`events>0`，证据保存在
+`artifacts/shm-backend-时间戳/`。
+
+跨进程竞争无法用单进程 TSan 跟踪，正确性由逐条数据校验、回绕/满队列边界、
+崩溃重启用例和双进程 RPC 验证保证。ASan/UBSan 与 TSan 均运行全部 89 个测试。
 
 ## Sanitizer
 

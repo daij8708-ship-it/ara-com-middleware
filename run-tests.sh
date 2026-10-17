@@ -9,7 +9,7 @@
 #    bash run-tests.sh                  # 默认：unit + guards + shm + vsomeip（约 4 分钟）
 #    bash run-tests.sh quick            # 只跑不依赖 vsomeip 的快速回归（约 1 分钟）
 #    bash run-tests.sh all              # unit + guards + shm + asan + tsan + vsomeip
-#    bash run-tests.sh shm              # 同机共享内存通道：单测 + 双进程压测
+#    bash run-tests.sh shm              # 共享内存：单测 + 双进程压测 + RPC 多客户端
 #    bash run-tests.sh vsomeip          # 只跑真实 SOME/IP 端到端（需要 vsomeip3）
 #    bash run-tests.sh capacity         # 容量测试（约 21 分钟）
 #    bash run-tests.sh unit --clean -j 8
@@ -22,7 +22,7 @@
 #  模式（可以写多个，按顺序执行）：
 #    unit      NullBackend 单元测试（GTest + ctest）
 #    guards    测试判定与失败归档的回归检查（python3 + g++）
-#    shm       共享内存通道单测 + 双进程吞吐/崩溃恢复验证
+#    shm       共享内存单测 + 裸通道压测 + RPC 多客户端验证
 #    vsomeip   真实 SOME/IP：双进程链路、异步完成、多在途并发、停止恢复
 #    quick     unit + guards（不依赖 vsomeip，用于快速回归）
 #    asan      AddressSanitizer + UndefinedBehaviorSanitizer 构建并测试
@@ -161,7 +161,7 @@ list_modes() {
 可用模式：
   unit      NullBackend 单元测试（GTest + ctest）
   guards    测试判定与失败归档的回归检查（python3 + g++）
-  shm       共享内存通道单测 + 双进程吞吐/崩溃恢复验证
+  shm       共享内存单测 + 裸通道压测 + RPC 多客户端验证
   vsomeip   真实 SOME/IP：双进程链路、异步完成、多在途并发、停止恢复
   quick     unit + guards（不依赖 vsomeip）
   asan      AddressSanitizer + UndefinedBehaviorSanitizer
@@ -533,7 +533,7 @@ mode_tsan() {
 }
 
 mode_shm() {
-    local display="共享内存通道"
+    local display="共享内存通道与 backend"
     if [ "$(uname -s)" != "Linux" ]; then
         skip_stage "$display" "仅支持 Linux/POSIX 共享内存"
         return 0
@@ -555,11 +555,14 @@ mode_shm() {
         -DARA_COM_BUILD_DEMOS=OFF
     build_stage "$display 单元测试" shm build-shm
     stage "运行 $display 单元测试" "$LOG_DIR/ctest-shm.log" \
-        ctest --test-dir "$SCRIPT_DIR/build-shm" -R ShmChannelTest \
+        ctest --test-dir "$SCRIPT_DIR/build-shm" -R 'Shm(Channel|Backend)Test' \
         --output-on-failure --timeout 120
 
     stage "双进程共享内存压测" "$LOG_DIR/shm-pair.log" \
         bash "$SCRIPT_DIR/scripts/verify_shm.sh" "$SCRIPT_DIR/build-shm"
+
+    stage "共享内存 RPC 多客户端验证" "$LOG_DIR/shm-backend.log" \
+        bash "$SCRIPT_DIR/scripts/verify_shm_backend.sh" "$SCRIPT_DIR/build-shm"
 }
 
 mode_vsomeip() {

@@ -23,6 +23,10 @@
 #include <vsomeip/vsomeip.hpp>
 #endif
 
+#if defined(ARA_COM_USE_POSIX_SHM)
+#include "shm_backend.h"
+#endif
+
 namespace ara {
 namespace com {
 namespace runtime {
@@ -759,6 +763,13 @@ std::shared_ptr<ICommunicationBackend> create_backend(BackendType type) {
 #ifdef ARA_COM_USE_VSOMEIP
         case BackendType::VSOMEIP:
             return std::make_shared<VSomeIPBackend>();
+#endif
+        case BackendType::SHM:
+#if defined(ARA_COM_USE_POSIX_SHM)
+            return std::make_shared<ShmBackend>();
+#else
+            ARA_LOG_ERROR("RUNTIME", "SHM backend is not enabled in this build");
+            return nullptr;
 #endif
         case BackendType::NULL_BACKEND:
         default:

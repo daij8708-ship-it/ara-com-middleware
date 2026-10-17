@@ -65,9 +65,39 @@ msg_id(2B, 大端) | total(1B) | index(1B) | payload_len(2B, 大端) | payload
 - 容量尾部放不下一条记录时，先写跳过标记，消费者看到标记后跳到回绕边界；
 - 生产者写完记录后 release 发布 `tail`，消费者 acquire 读取；长度越界或记录不完整时
   把 `state` 标成 `BROKEN`，不再继续读；
-- 唤醒用命名信号量，接收侧用单调时钟超时；通道不做服务发现、方法路由或事件订阅。
+- 唤醒用命名信号量，接收侧用单调时钟超时；底层通道不做服务发现、方法路由或事件订阅。
 
 单条消息上限默认 64 KiB，每个方向的容量默认 1 MiB；服务端和客户端必须配置一致。
+
+## 共享内存 Backend 的控制帧
+
+`ShmBackend` 在通道负载里再包一层固定 24 字节帧头，字段为主机序（只用于同机通信）：
+
+| 偏移 | 长度 | 字段 |
+| --- | --- | --- |
+| 0 | 4 | magic `SHM1` |
+| 4 | 2 | version，当前为 1 |
+| 6 | 2 | type |
+| 8 | 2 | service id |
+| 10 | 2 | instance id |
+| 12 | 2 | method id / event id |
+| 14 | 2 | session |
+| 16 | 2 | status（响应使用 `ComRet` 数值） |
+| 18 | 2 | 保留 |
+| 20 | 4 | payload_size |
+| 24 | N | payload |
+
+type 取值：
+
+- `1 HELLO`：payload 为 `major(1B) | minor(4B) | 数据通道名`，服务端校验服务已发布且版本一致；
+- `2 ACK`：payload 为空，表示客户端注册成功；
+- `3 REQUEST` / `4 RESPONSE`：`id` 为 Method，`session` 用于匹配请求与响应；
+- `5 EVENT`：`id` 为 Event，只发送给已订阅的客户端；
+- `6 SUBSCRIBE` / `7 UNSUBSCRIBE`：`id` 为 Event，`session` 携带 Event Group；
+- `8 BYE`：客户端退出或服务端停止发布时通知对端。
+
+`payload_size` 必须等于总帧长减 24；单帧上限 64 KiB。客户端注册通过文件锁串行化，
+服务端最多接受 32 个客户端。这里没有动态服务发现：客户端按固定服务名找到控制通道。
 
 ## 已知非标准部分
 
@@ -77,3 +107,4 @@ msg_id(2B, 大端) | total(1B) | index(1B) | payload_len(2B, 大端) | payload
 - 事件的 32 位序号头与续收 Method（`0x7FFE`）是项目自定义扩展，不属于 ara::com / SOME/IP 标准。
 - 方法请求的 8 字节请求 key 与"至多一次"去重窗口同样是项目自定义扩展。
 - 同机共享内存环的头部、记录格式和唤醒方式为项目自定义，不属于 ara::com 标准。
+- 共享内存 Backend 的 24 字节控制帧、HELLO/ACK 注册和固定服务名同样为项目自定义扩展。

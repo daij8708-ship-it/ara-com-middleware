@@ -19,6 +19,7 @@ E2E / 分片重组 / 心跳 / 重连 / 日志 / 配置
 
 独立于 Backend 的一条同机通路：
 SharedMemoryChannel：双向 SPSC 环形队列 + 命名信号量唤醒
+ShmBackend：基于 SharedMemoryChannel 的 ICommunicationBackend 实现
 ```
 
 ## 关键取舍
@@ -31,7 +32,7 @@ SharedMemoryChannel：双向 SPSC 环形队列 + 命名信号量唤醒
 
 ## 同机共享内存通道
 
-`src/ipc/` 是独立于 `ICommunicationBackend` 的字节通道，不参与服务发现、方法路由和事件订阅：
+`src/ipc/` 是底层字节通道，本身不参与服务发现、方法路由和事件订阅：
 
 - 服务端到客户端、客户端到服务端各一条 SPSC 环形队列，放在 POSIX 共享内存里；
 - `head`/`tail` 是自由增长的字节计数，下标为 `pos % capacity`，空/满没有二义性；
@@ -45,6 +46,22 @@ SharedMemoryChannel：双向 SPSC 环形队列 + 命名信号量唤醒
 跨进程共享内存的竞争不会被单进程 TSan 跟踪到，因此正确性证据来自双进程逐条校验、
 回绕/满队列边界用例和崩溃重启用例，见 `scripts/verify_shm.sh`。
 
+### ShmBackend：把通道接到 ara::com API
+
+`src/communication/shm_backend.*` 在通道之上实现 `ICommunicationBackend`：
+
+- 服务端创建 `<svc>_<sid>_<iid>.ctl` 控制通道，客户端串行发送 HELLO 注册；
+  服务端打开客户端预先创建的数据通道并回 ACK，之后数据只走这条独立通道；
+- 客户端用文件锁串行化注册，数据通道名包含进程号和进程内递增序号，避免重名；
+- Method 请求携带 `(sid, iid, mid, session)`，服务端按方法号查 handler，
+  响应从原客户端通道返回；同一客户端的多条请求按会话号匹配；
+- Event 只发送给已发送 SUBSCRIBE 的客户端，`send_event` 遍历在线连接；
+- 客户端连接线程负责注册、断连检测和重连；服务端后台线程定期清理已退出客户端；
+- 单服务端最多 32 个客户端，单条消息上限 64 KiB，不做动态服务发现。
+
+服务端方法 handler 在对应客户端的数据接收线程上执行，不同客户端之间可以并发；
+用户 handler 需要自行保证线程安全。
+
 ## 线程安全约束
 
 - 用户回调必须在框架内部锁释放后执行。
@@ -53,3 +70,5 @@ SharedMemoryChannel：双向 SPSC 环形队列 + 命名信号量唤醒
 - Proxy/Skeleton 销毁前必须先停止心跳、重连和后端事件循环。
 - 共享内存通道的接收回调由独立线程调用，且不持有通道内部锁；停止时 join。
 - 共享内存通道析构前先停止接收线程，再由创建者 unlink 共享内存和信号量。
+- `ShmBackend` 服务端每个客户端一条接收线程；方法 handler 不持后端锁执行。
+- `ShmBackend` 客户端先停后端（含接收线程），再销毁 Proxy，避免回调落到已析构对象。

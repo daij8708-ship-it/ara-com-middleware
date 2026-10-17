@@ -48,6 +48,7 @@ if(ARA_COM_BUILD_SHM)
     add_executable(ara_com_shm_tests
         test_main.cpp
         test_shm_channel.cpp
+        test_shm_backend.cpp
     )
 
     target_link_libraries(ara_com_shm_tests

@@ -67,6 +67,22 @@ std::string sem_object(const std::string& base, const char* direction) {
     return "/ara_com_" + base + "_" + direction + "_data";
 }
 
+// glibc 的 sem_open/sem_close 共用一个全局注册表；本进程内串行化，
+// 避免并发打开/关闭同名对象时触发注册表竞争。
+std::mutex g_sem_lifecycle_mutex;
+
+void close_semaphore(sem_t* sem) {
+    if (sem == SEM_FAILED) return;
+    std::lock_guard<std::mutex> lock(g_sem_lifecycle_mutex);
+    ::sem_close(sem);
+}
+
+void unlink_semaphore(const std::string& name) {
+    if (name.empty()) return;
+    std::lock_guard<std::mutex> lock(g_sem_lifecycle_mutex);
+    ::sem_unlink(name.c_str());
+}
+
 int wait_semaphore(sem_t* sem, std::uint32_t timeout_ms) {
     struct timespec deadline {};
 #if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 30))
@@ -184,6 +200,7 @@ struct SharedMemoryChannel::Impl {
     }
 
     static sem_t* create_semaphore(const std::string& name, std::string& error) {
+        std::lock_guard<std::mutex> lock(g_sem_lifecycle_mutex);
         sem_t* sem = ::sem_open(name.c_str(), O_CREAT | O_EXCL, 0600, 0);
         if (sem == SEM_FAILED && errno == EEXIST) {
             // 共享内存已判定为陈旧/不存在，同名信号量也是残留对象。
@@ -198,7 +215,11 @@ struct SharedMemoryChannel::Impl {
                                  std::chrono::steady_clock::time_point deadline,
                                  std::string& error) {
         for (;;) {
-            sem_t* sem = ::sem_open(name.c_str(), 0);
+            sem_t* sem = SEM_FAILED;
+            {
+                std::lock_guard<std::mutex> lock(g_sem_lifecycle_mutex);
+                sem = ::sem_open(name.c_str(), 0);
+            }
             if (sem != SEM_FAILED) return sem;
             if (errno != ENOENT) {
                 error = errno_text("sem_open(" + name + ")", errno);
@@ -295,7 +316,7 @@ struct SharedMemoryChannel::Impl {
 
     static void close_region(Region& region) {
         if (region.sem != SEM_FAILED) {
-            ::sem_close(region.sem);
+            close_semaphore(region.sem);
             region.sem = SEM_FAILED;
         }
         if (region.map != nullptr) {
@@ -312,8 +333,8 @@ struct SharedMemoryChannel::Impl {
         if (created) {
             if (!outgoing.shm_name.empty()) ::shm_unlink(outgoing.shm_name.c_str());
             if (!incoming.shm_name.empty()) ::shm_unlink(incoming.shm_name.c_str());
-            if (!outgoing.sem_name.empty()) ::sem_unlink(outgoing.sem_name.c_str());
-            if (!incoming.sem_name.empty()) ::sem_unlink(incoming.sem_name.c_str());
+            unlink_semaphore(outgoing.sem_name);
+            unlink_semaphore(incoming.sem_name);
             created = false;
         }
 
@@ -357,8 +378,8 @@ struct SharedMemoryChannel::Impl {
         if (s2c_existing == Existing::Stale || c2s_existing == Existing::Stale) {
             ::shm_unlink(s2c.c_str());
             ::shm_unlink(c2s.c_str());
-            ::sem_unlink(s2c_sem.c_str());
-            ::sem_unlink(c2s_sem.c_str());
+            unlink_semaphore(s2c_sem);
+            unlink_semaphore(c2s_sem);
         }
 
         // O_EXCL 创建共享内存同时充当"同名通道只有一个服务端"的互斥：
@@ -386,8 +407,8 @@ struct SharedMemoryChannel::Impl {
         }
         sem_t* c2s_data = create_semaphore(c2s_sem, error);
         if (c2s_data == SEM_FAILED) {
-            ::sem_close(s2c_data);
-            ::sem_unlink(s2c_sem.c_str());
+            close_semaphore(s2c_data);
+            unlink_semaphore(s2c_sem);
             close_region(outgoing);
             close_region(incoming);
             ::shm_unlink(s2c.c_str());
@@ -447,7 +468,7 @@ struct SharedMemoryChannel::Impl {
         }
         sem_t* s2c_data = open_semaphore(s2c_sem, deadline, error);
         if (s2c_data == SEM_FAILED) {
-            ::sem_close(c2s_data);
+            close_semaphore(c2s_data);
             close_region(outgoing);
             close_region(incoming);
             set_error(error);

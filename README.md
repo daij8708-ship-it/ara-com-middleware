@@ -11,24 +11,26 @@
 
 - `ServiceSkeleton`：服务发布、Event 注册/发送和 Method handler；
 - `ServiceProxy`：服务发现、Event 订阅、同步/异步 Method 调用；
-- 两种 backend：用于单元测试的进程内 `NullBackend`，以及可选的 vsomeip backend；
+- 三种 backend：用于单元测试的进程内 `NullBackend`、可选的 vsomeip backend，以及同机共享内存 `ShmBackend`；
 - CRC-8 + rolling counter、应用层分片、心跳和指数退避重连；
 - 事件断点续收：32 位序号 + 发布端环形缓存 + 保留 Method 回放（项目自定义扩展，默认关闭）；
 - 同步 RPC 至多一次：64 位请求 key + 服务端去重窗口，超时重试复用同一 key（项目自定义扩展，默认关闭）；
 - JSON 配置、异步日志以及 GTest 测试；
 - 同机共享内存通道：POSIX shared memory + 双向 SPSC 环形队列 + 命名信号量唤醒，
-  覆盖回绕、满队列、陈旧对象清理和双进程压测。
+  覆盖回绕、满队列、陈旧对象清理和双进程压测；
+- 共享内存 backend：多客户端注册、Method 路由和 Event 订阅广播，单条消息上限 64 KiB。
 
-`src/ipc/shared_memory.*` 是独立的同机字节通道，不实现 `ICommunicationBackend`，
-也不参与服务发现和方法路由。
+`src/ipc/shared_memory.*` 是最底层的同机字节通道；`ShmBackend` 在它之上实现
+`ICommunicationBackend`，让 `ServiceProxy` / `ServiceSkeleton` 可以不改代码切换传输。
+共享内存 backend 不做动态服务发现，客户端按固定服务名注册到控制通道。
 
 ## 代码结构
 
 ```text
-src/communication/   Proxy、Skeleton 和 backend
+src/communication/   Proxy、Skeleton 和 backend（含 ShmBackend）
 src/safety/          E2E、分片、心跳、重连
 src/common/          配置解析、日志和公共类型
-src/ipc/             同机共享内存通道（SPSC 环形队列）
+src/ipc/             POSIX 共享内存通道（SPSC 环形队列）
 demo/                车速服务示例
 tests/               单元测试和并发测试
 config/              服务与 vsomeip 配置
@@ -58,7 +60,7 @@ bash run-tests.sh --help          # 完整用法
 | --- | --- |
 | `unit` | NullBackend 单元测试（GTest + ctest） |
 | `guards` | 判定逻辑与失败归档的回归检查 |
-| `shm` | 共享内存通道单测 + 双进程吞吐/崩溃恢复验证 |
+| `shm` | 共享内存单测 + 裸通道双进程压测 + RPC 多客户端验证 |
 | `vsomeip` | 双进程链路、异步完成、多在途并发、停止恢复 |
 | `quick` | `unit` + `guards`，不依赖 vsomeip |
 | `asan` | ASan + UBSan 构建并测试 |
@@ -98,7 +100,7 @@ run-vsomeip.cmd completion server      只开服务端（客户端由你手动�
 误导。日志分开放：`server.log` 和 `client.log`，客户端跑完会自动调用离线检查器并把
 结论写进 `check.txt`。服务端窗口按 Ctrl+C 结束。
 
-## 同机共享内存通道
+## 同机共享内存通道与 backend
 
 `src/ipc/` 提供一条独立于 ara::com backend 的字节通道，用于同机两个进程之间的
 高频消息传递。服务端创建 POSIX 共享内存和命名信号量，客户端按名字打开；
@@ -119,13 +121,35 @@ cmake --build build-shm -j"$(nproc)"
 
 ```bash
 bash scripts/verify_shm.sh build-shm
+```
+
+### 通过 ShmBackend 跑 ara::com 调用
+
+`ShmBackend` 实现 `ICommunicationBackend`，让 `ServiceProxy` / `ServiceSkeleton`
+可以直接走共享内存。服务端创建控制通道，客户端注册后获得一条独立双向通道；
+Method 请求按方法号路由，Event 只发送给已订阅的客户端，最多支持 32 个客户端。
+
+```bash
+# 终端一：服务端，service_id 0x7A01（十进制 31233），运行 20 秒
+./build-shm/tools/shm_rpc_pair server 31233 20000
+
+# 终端二、三：两个客户端，各 200 次 RPC
+./build-shm/tools/shm_rpc_pair client 31233 1 200
+./build-shm/tools/shm_rpc_pair client 31233 2 200
+```
+
+客户端输出 `CLIENT_RESULT id=... ok=... fail=... events=...`。自动验证：
+
+```bash
+bash scripts/verify_shm_backend.sh build-shm
 # 或者
 bash run-tests.sh shm
 ```
 
-边界：通道只负责字节消息，不做服务发现、方法路由或事件订阅；当前是单服务端单客户端，
-未接入 `ICommunicationBackend`。服务端正常退出会 unlink 共享内存和信号量；异常退出后
-下一次启动会按 `creator_pid` 清理陈旧对象。
+边界：共享内存 backend 不做动态服务发现，客户端按固定服务名注册；单服务端最多
+32 个客户端，单条消息上限 64 KiB；每个客户端一条通道，方法处理在各自接收线程上
+并发执行，业务 handler 需要自己保证线程安全。服务端正常退出会 unlink 共享内存和
+信号量；异常退出后下一次启动按 `creator_pid` 清理陈旧对象。
 
 ## 构建
 
@@ -156,9 +180,9 @@ cmake --build build-vsomeip -j"$(nproc)"
 
 ## 运行示例
 
-跨进程的 ara::com server/client 示例必须使用 vsomeip backend。`NullBackend` 只在同一
-进程内路由消息，用于 API 单元测试；共享内存通道是另一条独立的同机字节通道，不参与
-下面的 ara::com 示例。
+跨进程的 ara::com 示例可以使用 vsomeip backend 或 `ShmBackend`。`NullBackend` 只在
+同一进程内路由消息，用于 API 单元测试；共享内存版示例见
+`tools/shm_rpc_pair.cpp`，下面的命令演示 vsomeip 方式。
 
 ```bash
 export VSOMEIP_CONFIGURATION="$PWD/config/vsomeip.json"
@@ -180,18 +204,19 @@ export VSOMEIP_APPLICATION_NAME=ara_com_client_4660
 - 服务停止恢复：通过 SIGTERM 停止服务端并重启，检查可用性变化及恢复后的 RPC。
 - 容量测试：真实 vsomeip 后端，同机独立 router/server/client，64 字节 Echo，单客户端在途窗口 1/4/16/32/64/128；每档预热 10 秒、测量 60 秒、重复 3 次。窗口数不是独立客户端数量。
 - 同机共享内存：10 万条 64 B 消息在 WSL2 上约 250 万条/秒、p99 约 40 µs；2000 条 64 KiB 消息约 1.0–1.25 GB/s、p99 约 0.8–1.0 ms（单次实测，随机器变化）。覆盖回绕、满队列、客户端先启动和服务端 `kill -9` 后的重启清理。
+- 共享内存 backend：89 个单测（含 4 个 backend 用例）通过；双进程验证中两个客户端各 200 次 RPC，0 失败且都收到 Event。ASan/UBSan 与 TSan 均为 89/89。
 - 运行时修复：保存服务发布时的 major/minor 版本，停止发布时使用相同版本，并避免重复停止。
 
 复现步骤见[测试运行指南](docs/run-all-tests.md)。
 测试指南末尾列出了运行记录需要保存的信息；原始报告单独保存。
-当前 CI 运行单元测试（含共享内存通道）及 ASan/UBSan；真实后端集成与容量测试需按指南手动执行，未接入 CTest/CI。
+当前 CI 运行 89 个单元测试（含共享内存通道与 backend）及 ASan/UBSan；真实 vsomeip 集成与容量测试需按指南手动执行，未接入 CTest/CI。
 
 ## 没有覆盖的范围
 
 - 完整的 ara::com API 和代码生成流程；
 - AUTOSAR E2E Profile 兼容性；
 - SOME/IP-TP；
-- 共享内存通道接入 `ICommunicationBackend`：当前只提供字节通道，不支持服务发现、方法路由或多客户端；
+- 共享内存 backend 的动态服务发现：目前按固定服务名注册，不做运行时发现；
 - 网络管理、持久化和安全认证。
 
 这些边界也是后续继续完善这个项目时最值得展开的部分。

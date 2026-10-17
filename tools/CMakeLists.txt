@@ -1,5 +1,8 @@
 add_executable(shm_pair shm_pair.cpp)
+add_executable(shm_rpc_pair shm_rpc_pair.cpp)
 
 target_link_libraries(shm_pair PRIVATE ara_com Threads::Threads)
+target_link_libraries(shm_rpc_pair PRIVATE ara_com Threads::Threads)
 
 target_include_directories(shm_pair PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(shm_rpc_pair PRIVATE ${CMAKE_SOURCE_DIR}/src)

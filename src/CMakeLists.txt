@@ -14,6 +14,7 @@ set(ARA_COM_SOURCES
 
     # 通信层
     communication/runtime.cpp
+    communication/shm_backend.cpp
     communication/service_skeleton.cpp
     communication/service_proxy.cpp
 
